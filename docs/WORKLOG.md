@@ -14,7 +14,8 @@ Newest day first. Updated after every finished task (see CLAUDE.md working rules
 **Evidence**
 - `python -m pip install --dry-run playwright anthropic fastapi uvicorn[standard]` resolves on Python 3.14 (nothing installed yet).
 - T1: `pytest -q` -> `15 passed in 11.57s` (6 buggy-build tests: S1-S6 each appear in the trigger log; 8 clean-build tests: delete, reopen, blank rejected with message, long titles wrap without overflow, duplicate shows message, counter correct, add/filters, page loads with `bugs=off`; 1 reset test). Sanity check: the 8 clean tests pointed at the buggy build all fail.
-- Measured: in the buggy build the page only overflows horizontally from about 90 characters at a 1280 px viewport, although S4 is logged from 61 characters.
+- Measured: in the buggy build the page only overflows horizontally from about 90 characters at a 1280 px viewport, although S4 was logged from 61 characters (fixed by the follow-up below).
+- T1 follow-ups (owner decisions on the T1 report): S4 is now logged only when `scrollWidth > clientWidth` after rendering; `ground_truth.json` uses `signature_any` (11-12 lowercase synonyms per issue). `pytest -q` -> `17 passed in 12.66s` (new: 69-char title does not log S4; ground truth file is well formed).
 
 **Next**
 - T2 harness: page-state extractor with numbered elements, step executor by index, evidence recorder, safety policy (see `docs/DECISIONS.md`).

@@ -21,6 +21,8 @@ ROOT = Path(__file__).resolve().parent.parent
 
 LONG_SENTENCE = " ".join(["long"] * 40)  # 159 characters with spaces
 LONG_WORD = "x" * 200                    # 200 characters, no spaces to wrap at
+OVERFLOWING_TITLE = " ".join(["long"] * 22)  # 109 characters: really overflows at 1280 px (limit is about 90)
+FITS_TITLE = " ".join(["long"] * 14)         # 69 characters: over 60 but fits on the page
 
 
 # ---- fixtures and helpers -------------------------------------------------
@@ -170,9 +172,19 @@ def test_buggy_s3_blank_title_is_accepted(server, page):
 
 def test_buggy_s4_long_title_overflows_page(server, page):
     page.goto(server + "/")
-    add_task(page, LONG_SENTENCE)
+    add_task(page, OVERFLOWING_TITLE)
     assert wait_for_trigger(server, "S4")
     assert overflows(page)
+
+
+def test_buggy_s4_is_not_logged_when_a_long_title_still_fits(server, page):
+    """Trigger rule (D4): logged only when the overflow really shows, not for any title over 60."""
+    page.goto(server + "/")
+    add_task(page, FITS_TITLE)
+    expect(page.get_by_role("listitem")).to_have_count(3)
+    assert not overflows(page)
+    time.sleep(0.3)
+    assert "S4" not in trigger_ids(server)
 
 
 def test_buggy_s5_duplicate_gives_409_and_no_message(server, page):
@@ -303,3 +315,15 @@ def test_reset_restores_seeds_and_clears_trigger_log(server, page):
     assert trigger_ids(server) == []
     _, text = http("GET", server + "/api/tasks")
     assert [t["title"] for t in json.loads(text)] == ["Buy milk", "Write report"]
+
+
+def test_ground_truth_file_is_well_formed():
+    truth = json.loads((ROOT / "demo_app" / "ground_truth.json").read_text(encoding="utf-8"))
+    assert [item["id"] for item in truth] == ["S1", "S2", "S3", "S4", "S5", "S6"]
+    for item in truth:
+        assert item["kind"] in ("bug", "improvement")
+        assert item["expected_signal"] in (
+            "http_5xx", "http_4xx", "no_effect", "overflow", "judge_only")
+        words = item["signature_any"]
+        assert 8 <= len(words) <= 12
+        assert all(w == w.lower() for w in words)

@@ -115,9 +115,8 @@ function taskRow(task) {
   title.className = "title";
   title.textContent = task.title;
   if (BUGGY && task.title.length > 60) {
-    // SEEDED S4: long titles get the no-wrap style (see style.css)
+    // SEEDED S4: long titles get the no-wrap style (see style.css); the trigger is in render()
     title.classList.add("nowrap");
-    trigger("S4", `title of ${task.title.length} characters rendered without wrapping`);
   }
   label.append(box, title);
 
@@ -149,6 +148,13 @@ function render() {
     trigger("S6", `footer shows ${shown}, active tasks are ${active}`);
   }
   itemsLeft.textContent = `${shown} ${shown === 1 ? "item" : "items"} left`;
+
+  const root = document.documentElement;
+  if (BUGGY && list.querySelector(".nowrap") && root.scrollWidth > root.clientWidth) {
+    // SEEDED S4 trigger: logged only when the page really overflows sideways, not merely
+    // when a title is long (reading scrollWidth forces the browser to lay out the page first).
+    trigger("S4", `page is ${root.scrollWidth}px wide in a ${root.clientWidth}px viewport`);
+  }
 }
 
 load();
