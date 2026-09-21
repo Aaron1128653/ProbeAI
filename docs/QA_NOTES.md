@@ -44,3 +44,22 @@ For each part of the system: what it does, why it is built this way, how to say 
 - **Evidence size:** the outline stored in `evidence.json` is cut at 20000 characters. The fingerprint is still computed from the whole page, so a change far down the page is not missed.
 - **Accepted limits, on purpose:** a clock or counter on the page can only make "nothing happened" fire *less* often, never falsely. A clickable box with no role (a bare `div`) is not seen by the outline; that is a known limit of V1. Every safety check uses up one step of the budget, including refused or invalid steps, so a model that keeps choosing bad targets runs out of steps.
 - **Answer key:** for S2 (a completed task cannot be reopened) the expected signal is now "state not reached": the box was asked to become unticked and is still ticked. It is not "nothing happened", because a request did go out.
+
+## T3 - Oracles, replay and tiers (`probe/oracles.py`, `probe/verify.py`, `probe/findings.py`)
+
+**oracles.py** (what looks wrong)
+- An oracle is a plain rule, no AI: it looks at what the browser recorded during one step and says "this looks wrong".
+- **Hard signals** are things a working app should not do whatever the user wanted: an uncaught JavaScript error, a request that got no answer, a server error (HTTP 5xx) from the app itself. **Contextual signals** can be fine depending on intent: a 4xx (the app may be rightly refusing bad input), nothing visible happened, a box is not in the state we asked for, the page is wider than the window, a console error.
+- Why two kinds: a server crash is never the user's fault, but a "409 duplicate" may be exactly the right behaviour. So only a hard signal can make a finding "Confirmed" by itself.
+- "State not reached" catches S2: we asked for the box to be unticked and it is still ticked. Chrome's own "Failed to load resource" console line is not counted again next to the failed request.
+
+**verify.py** (does it happen again?)
+- Replay runs the recorded steps again in a brand-new browser, after resetting the app to its starting state. No AI: it uses only the role, name and position saved for each step.
+- A signal is "reproduced" when the same kind of signal, with the same normalised key (for example `DELETE /api/tasks/{id} 500`), shows up on the same step. "2/2" means it came back in both replays.
+- Why: a single failure can be a hiccup. If it comes back from a clean start it is real. Limit, said openly: a replay also repeats the AI's own mistakes (for example clicking the wrong thing); the later "disprove" pass exists for that.
+
+**findings.py** (what it means)
+- A candidate is one step that raised signals. A problem that simply persists (the page staying too wide for every later step) is merged into the first candidate so it is one item, not four.
+- Tiers come from rules, never from a model's confidence: **Confirmed** = reproduced and (a hard signal, or a contextual signal that survived the disprove pass). **Likely** = reproduced with contextual evidence only, or seen once but not reproduced (labelled so). **Dropped** = no signal and not reproduced.
+- The two AI judgements (was the expectation violated? did it survive the disprove pass?) are inputs that are empty for now, so contextual-only findings top out at Likely today. `audit.json` lists every candidate, every merged duplicate and every step that raised nothing, with the reason.
+- S3 (blank title) and S6 (wrong counter) give no candidate on purpose: no rule can see them, they need the AI judge later.

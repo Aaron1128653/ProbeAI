@@ -1,15 +1,21 @@
-"""Carry out one step in the browser and record the semantic locator that was used.
+"""Carry out steps in the browser and record the semantic locator that was used.
 
 A step names its target either by the ref the model picked ({"ref": "e8"}, live runs) or by role,
 name and nth ({"role": "button", "name": "Delete Buy milk", "nth": 0}, scripts and replay). Either
 way the record keeps role + name + nth, because refs do not survive a reload and replay needs them.
+
+execute_step does one step. run_steps opens a page and does a whole list, keeping everything that
+each step produced. Both the first run and every replay go through run_steps.
 """
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from playwright.sync_api import Error as PlaywrightError
 
-from probe.state import PageState, RefEntry
+from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder, StepEvidence
+from probe.safety import SafetyPolicy
+from probe.state import PageState, RefEntry, capture_state
 
 ACTION_TIMEOUT_MS = 5000  # how long Playwright may wait for an element to become clickable
 ACTIONS = ("click", "type", "check", "uncheck", "press")
@@ -129,3 +135,49 @@ def execute_step(page, state: PageState, step: Step, recorder=None, policy=None)
         page.wait_for_timeout(300)
     record.settle_ms = round((time.monotonic() - started) * 1000)
     return record
+
+
+# ---- a whole list of steps ---------------------------------------------------
+
+@dataclass
+class StepResult:
+    """Everything one step produced."""
+    record: StepRecord
+    evidence: StepEvidence
+    state_before: PageState
+    state_after: PageState
+
+
+@dataclass
+class Run:
+    url: str
+    started_at: str
+    load: dict                 # requests, console, page errors, dialogs seen while the page opened
+    states: list[PageState]    # before step 1, before step 2 ... after the last step
+    results: list[StepResult]
+
+
+def run_steps(page, url: str, steps: list[Step], out_dir, ignore_paths=DEFAULT_IGNORE_PATHS,
+              max_steps: int = 15) -> Run:
+    """Open `url` and run the steps one after the other, recording evidence for each."""
+    recorder = EvidenceRecorder(page, out_dir, ignore_paths)
+    policy = SafetyPolicy(allowed_origin=url, max_steps=max_steps)
+
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    page.goto(url)
+    recorder.wait_until_settled()
+    load = {"requests": list(recorder.requests), "console": list(recorder.console),
+            "page_errors": list(recorder.page_errors), "dialogs": list(recorder.dialogs)}
+
+    state = capture_state(page)
+    states = [state]
+    results = []
+    for n, step in enumerate(steps, start=1):
+        recorder.begin_step(n, state)
+        record = execute_step(page, state, step, recorder, policy)
+        state_after = capture_state(page)
+        evidence = recorder.end_step(record, state_after)
+        results.append(StepResult(record, evidence, state, state_after))
+        states.append(state_after)
+        state = state_after
+    return Run(url=url, started_at=started_at, load=load, states=states, results=results)

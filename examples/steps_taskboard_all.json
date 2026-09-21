@@ -1,0 +1,77 @@
+[
+  {
+    "action": "click",
+    "target": {
+      "role": "button",
+      "name": "Delete Buy milk"
+    },
+    "expect": "the task 'Buy milk' disappears from the list"
+  },
+  {
+    "action": "check",
+    "target": {
+      "role": "checkbox",
+      "name": "Write report"
+    },
+    "expect": "'Write report' is ticked and the items-left counter goes down"
+  },
+  {
+    "action": "uncheck",
+    "target": {
+      "role": "checkbox",
+      "name": "Write report"
+    },
+    "expect": "'Write report' is unticked again"
+  },
+  {
+    "action": "type",
+    "target": {
+      "role": "textbox",
+      "name": "New task"
+    },
+    "text": "   ",
+    "expect": "the box holds the text I typed"
+  },
+  {
+    "action": "click",
+    "target": {
+      "role": "button",
+      "name": "Add"
+    },
+    "expect": "a blank task is rejected with a message"
+  },
+  {
+    "action": "type",
+    "target": {
+      "role": "textbox",
+      "name": "New task"
+    },
+    "text": "long long long long long long long long long long long long long long long long long long long long long long",
+    "expect": "the box holds the long title"
+  },
+  {
+    "action": "click",
+    "target": {
+      "role": "button",
+      "name": "Add"
+    },
+    "expect": "the long title is added and the page still fits the window"
+  },
+  {
+    "action": "type",
+    "target": {
+      "role": "textbox",
+      "name": "New task"
+    },
+    "text": "Write report",
+    "expect": "the box holds the text I typed"
+  },
+  {
+    "action": "click",
+    "target": {
+      "role": "button",
+      "name": "Add"
+    },
+    "expect": "a duplicate task is rejected with a visible message"
+  }
+]

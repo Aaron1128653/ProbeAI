@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from conftest import ROOT, http
+from conftest import http, load_steps
 from probe import executor
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder
@@ -87,6 +87,24 @@ def test_capture_state_finds_the_taskboard_refs_and_roles(server, page):
     text = render_for_llm(state)
     assert "untrusted data" in text and "<<<PAGE" in text and text.endswith("PAGE>>>")
     assert state.snapshot_ai in text
+
+
+def test_parse_refs_reads_text_field_values():
+    snapshot = "\n".join([
+        '- textbox "Plain" [ref=e1]: hello there',
+        '- textbox "Holder" [ref=e2]:',
+        '  - /placeholder: Type here',
+        '  - text: typed text',
+        '- textbox "Empty holder" [ref=e3]:',
+        '  - /placeholder: Type here',
+        '- textbox "Empty" [ref=e4]',
+        '- text: a sibling text node, not a value',
+        '- searchbox "Find" [ref=e5]: "123"',
+        '- textbox "Last" [ref=e6]',
+    ])
+    values = {r.name: r.value for r in parse_refs(snapshot, "http://app.test/")}
+    assert values == {"Plain": "hello there", "Holder": "typed text", "Empty holder": "",
+                      "Empty": "", "Find": "123", "Last": ""}
 
 
 def test_snapshots_are_capped_but_the_fingerprint_sees_the_whole_page(server, page):
@@ -177,6 +195,7 @@ def test_every_ref_reaches_the_same_element_by_ref_and_by_role_name_nth(server, 
     assert by_name[("Dark mode", 0)].checked is True
     assert by_name[("Option one", 0)].checked is False
     assert by_name[("Off", 0)].disabled is True
+    assert by_name[("Email", 0)].value == "a@b.c"  # value on the same line
 
     for r in state.refs:
         by_ref = page.locator(f"aria-ref={r.ref}").element_handle()
@@ -221,7 +240,9 @@ def test_type_press_check_and_uncheck(server, page, tmp_path):
 
     record = execute_step(page, capture_state(page), Step("type", box, text="Call Bob"), recorder)
     assert record.error is None
-    assert "Call Bob" in capture_state(page).snapshot_plain  # typed text is part of the page state
+    typed = capture_state(page)
+    assert "Call Bob" in typed.snapshot_plain  # typed text is part of the page state
+    assert typed.refs[0].value == "Call Bob"   # and readable per field (this field has a placeholder)
 
     execute_step(page, capture_state(page), Step("press", box, text="Enter"), recorder)
     state = capture_state(page)
@@ -298,10 +319,6 @@ def test_recorded_step_replays_through_its_semantic_locator_in_a_fresh_context(s
 
 
 # ---- evidence.py + run_script.py ---------------------------------------------
-
-def load_steps(name: str) -> list[Step]:
-    return [Step(**item) for item in json.loads((ROOT / "examples" / name).read_text(encoding="utf-8"))]
-
 
 def test_scripted_delete_on_the_buggy_build_records_the_500(server, page, tmp_path):
     run(page, server + BUGGY, load_steps("steps_delete.json"), tmp_path)

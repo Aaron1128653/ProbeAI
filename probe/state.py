@@ -17,11 +17,14 @@ PLAIN_CAP = 20000     # characters of the plain snapshot kept in the state (and 
 ACTIONABLE_ROLES = {"button", "link", "textbox", "checkbox", "radio", "combobox",
                     "menuitem", "tab", "switch", "searchbox", "slider"}
 CHECKABLE_ROLES = {"checkbox", "radio", "switch"}
+TEXT_FIELD_ROLES = {"textbox", "searchbox"}
 
 # A snapshot line looks like:  - button "Delete Buy milk" [ref=e8] [cursor=pointer]: Delete
 _LINE = re.compile(r'^\s*- (?P<role>[a-z]+)(?: "(?P<name>(?:[^"\\]|\\.)*)")?(?P<attrs>(?: \[[^\]]*\])*)')
 # A link is followed by its target:  - /url: /about
 _URL_LINE = re.compile(r"^\s*- /url: (?P<url>.*)$")
+# A text field with a placeholder shows its value on a child line:  - text: hello
+_TEXT_LINE = re.compile(r"^\s*- text: ?(?P<text>.*)$")
 
 
 @dataclass
@@ -33,6 +36,7 @@ class RefEntry:
     checked: bool | None      # checkbox / radio / switch only
     disabled: bool
     href: str | None = None   # absolute target of a link
+    value: str | None = None  # text typed into a textbox / searchbox ("" if empty), whitespace squeezed
 
 
 @dataclass
@@ -48,25 +52,42 @@ class PageState:
 
 
 def _unquote(text: str) -> str:
-    """Snapshot strings use JSON-style escapes (\\" and \\\\)."""
+    """Names in the snapshot use JSON-style escapes: a quote inside a name is written backslash-quote."""
     try:
         return json.loads(f'"{text}"')
     except ValueError:
         return text
 
 
+def _scalar(text: str) -> str:
+    """A value after "- text:" or "/url:" may be quoted when it would otherwise confuse YAML."""
+    text = text.strip()
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        try:
+            return json.loads(text)
+        except ValueError:
+            pass
+    return text
+
+
 def parse_refs(snapshot_ai: str, base_url: str) -> list[RefEntry]:
     refs: list[RefEntry] = []
     seen: dict[tuple[str, str], int] = {}
     last_link = None  # the link whose "/url:" line may come next
+    field, field_indent = None, 0  # the text field whose value may still come on a child line
     for line in snapshot_ai.splitlines():
+        indent = len(line) - len(line.lstrip())
+        if field is not None and indent <= field_indent:
+            field = None  # this line is no longer a child of the text field
+
         url_line = _URL_LINE.match(line)
         if url_line:
             if last_link is not None:
-                target = url_line["url"].strip()
-                if target.startswith('"') and target.endswith('"'):
-                    target = json.loads(target)
-                last_link.href = urljoin(base_url, target)
+                last_link.href = urljoin(base_url, _scalar(url_line["url"]))
+            continue
+        text_line = _TEXT_LINE.match(line)
+        if text_line and field is not None:
+            field.value = _scalar(text_line["text"])
             continue
 
         match = _LINE.match(line)
@@ -90,6 +111,10 @@ def parse_refs(snapshot_ai: str, base_url: str) -> list[RefEntry]:
         refs.append(entry)
         if role == "link":
             last_link = entry
+        if role in TEXT_FIELD_ROLES:
+            rest = line[match.end():]  # ": value" when the value sits on the same line
+            entry.value = _scalar(rest[1:]) if rest.startswith(":") else ""
+            field, field_indent = entry, indent
     return refs
 
 
