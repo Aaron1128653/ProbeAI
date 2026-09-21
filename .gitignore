@@ -1,0 +1,15 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+runs/
+node_modules/
+.idea/
+.vscode/
+*.log
+
+# reference material with personal / confidential info - never commit
+Mybackground/
+Project background/
