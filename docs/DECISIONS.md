@@ -127,6 +127,14 @@ Verified here, not assumed: Playwright 1.63.0 (pinned) has `page.aria_snapshot(m
 5. **Structured outputs, no tool use in V1.** Every model call is `messages.parse` with a Pydantic model: `AppPlan` (app model + missions), `StepDecision` (action, ref, text, expect), `Judgement` (findings), `Disproof`. The loop is ours, and nothing needs the model to call functions, so this is simpler than a strict tool schema for actions. Sonnet 5 runs adaptive thinking by default, so step and judge calls disable or lower it to protect latency. Whether Haiku 4.5 supports structured outputs is unverified: test on the first funded run, fall back to Sonnet 5 for steps if not. Model IDs: `claude-sonnet-5`, `claude-haiku-4-5`. Prices in the SDK reference (cached 2026-06-24, check the console): Sonnet 5 $2/$10, Haiku 4.5 $1/$5 per million input/output tokens; a rough estimate is 0.10-0.20 USD per run.
 6. **Two run profiles.** `live`: 3 missions, 10 total actions, 90 s hard timeout. `eval`: 5 missions, 15 total actions, 180 s. Judging and verification run **per mission** as soon as it ends, so confirmed findings stream to the screen while later missions still run.
 
+**D7 addendum - rulings after T2 (2026-09-21).**
+- **New contextual oracle `state_not_reached`** (fixes S2): for check / uncheck / type steps, after the step the target must be in the requested state (checked, unchecked, or textbox holds the typed text). If not, signal. S2 is a PATCH 200 with the box still checked, so `no_effect` correctly does not fire; `ground_truth.json` S2 `expected_signal` becomes `state_not_reached`.
+- **Password guard reads the real `type` attribute** of the resolved element before any `type` or `press` step (the snapshot hides `type=password`), and covers `press`.
+- **Blocklist matches by regex, not whole words**: allow words between ("delete my account"), allow inflections ("uploads"). Over-blocking is accepted as fail-safe: a task named "Pay rent" would have its controls blocked; the demo seeds do not collide.
+- **Accepted as is, documented in QA notes:** volatile text (clocks, counters) can only make `no_effect` fire *less*, never falsely; role-less clickables are a known V1 limit; every `SafetyPolicy.check()` spends budget, including blocked or invalid steps (it stops a model that keeps choosing bad refs).
+- **Evidence size:** the plain snapshot stored in `evidence.json` is capped at 20000 characters.
+- **Speed lever, not pulled yet:** about 0.5-1.5 s per step, mostly two screenshots. If the live profile misses 90 s, screenshot only the "after" state.
+
 Not adopted: nothing rejected outright. Already covered before this review: SafetyPolicy allows in-app delete (`Delete Buy milk`), and the S4 trigger and `signature_any` fixes (commit `662cd54`).
 
 ---
@@ -134,7 +142,7 @@ Not adopted: nothing rejected outright. Already covered before this review: Safe
 ## Tasks for /build (ordered; none needs an API key)
 
 - **T1 Demo app "TaskBoard"** - DONE, commit `1eabe27`, 15 tests pass. Follow-ups (fold into T2): S4 logs only when overflow manifests; `ground_truth.json` uses `signature_any` synonym lists.
-- **T2 Harness**: page-state extractor with numbered elements, step executor by index that records a semantic locator, evidence recorder (console, pageerror, requestfailed, >=400 responses, before/after screenshot, URL, text hash), safety policy (same origin, step budget, blocked patterns). *Accept*: a scripted step list (no LLM) against TaskBoard writes an evidence JSON that shows the S1 `DELETE ... 500`.
+- **T2 Harness** - DONE, commit `804c2b2`, 39 tests pass (independently re-run). ORIGINAL SPEC, superseded by D7 where they differ: page-state extractor with numbered elements, step executor by index that records a semantic locator, evidence recorder (console, pageerror, requestfailed, >=400 responses, before/after screenshot, URL, text hash), safety policy (same origin, step budget, blocked patterns). *Accept*: a scripted step list (no LLM) against TaskBoard writes an evidence JSON that shows the S1 `DELETE ... 500`.
 - **T3 Oracles + replay verifier**: turn evidence into signals, replay recorded steps in a fresh context, compute tiers. *Accept*: scripted run yields S1 = Confirmed, S3 = Likely/Improvement, clean mode = zero Confirmed.
 - **T4 LLM client with fake/replay mode**, structured schemas (AppModel, Mission, Step, Finding), token and cost log. *Accept*: full pipeline runs end to end against TaskBoard using recorded fake responses.
 - Then (needs funded key): T5 real prompts, T6 report + live UI, T7 evaluation runner.
