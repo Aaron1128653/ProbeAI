@@ -2,6 +2,30 @@
 
 Newest day first. Updated after every finished task (see CLAUDE.md working rules). `/wrapup` writes the final entry of a session.
 
+## 2026-09-21 - END-OF-DAY HANDOFF (stopped at 22:15 NZ; resume 2026-09-22)
+
+**State in one paragraph.** Day 1 built everything that does not need a model: TaskBoard demo app with 6 seeded issues (T1), browser harness (T2), oracles + replay verifier + tiers (T3, T3b), LLM client/schemas/prompts with fake/record/replay modes (T4). 167 tests pass (re-run by Opus, ~80 s). No real API call has been made yet. The agent loop that ties it together (T5) does not exist, so there is **no end-to-end AI run yet**. Git is clean at the last commit and tagged `end-of-day-2026-09-21`. Commit map and what is self-reported vs independently re-run: `docs/AUDIT_GUIDE.md`. All decisions: `docs/DECISIONS.md` D1-D9 (higher number wins). The T5 specification is D9.
+
+**First 30 minutes tomorrow**
+1. `cd "E:\Intership project"`, `git status` (expect clean), `git log --oneline | head -3`, `.venv\Scripts\pytest.exe -q` (expect 167 passed).
+2. Owner actions (Opus reminds): (a) set a workspace **spend limit of 10-12 USD** in the Anthropic Console; (b) `copy .env.example .env` and paste the key into `.env` locally (never into chat); (c) if not yet done, **confirm attendance to the company by email before 2026-09-25**.
+3. Start T5: `/build T5-0 budget guard, then T5 agent loop, exactly as specified in docs/DECISIONS.md D9` (Sonnet), or delegate to the `builder` agent from an Opus session. T5 uses the fake LLM only; no real API call. After it reports, Opus re-runs the suite and the scripted fake run before accepting.
+4. Only after T5 is accepted: the FIRST real call, a single-mission `live` run with `--yes-spend` and cap 0.10 USD, to measure real tokens and check Haiku 4.5 structured outputs and `thinking` disabled (D7 point 5). Record the run (`record` mode) so the UI can be built on `replay` for free.
+
+**Suggested schedule (feature freeze 2026-10-03; earliest presentation 2026-10-07)**
+9/22 T5-0 + T5 (fake). 9/23 first real run, prompt tuning (spend <= 3 USD). 9/24-25 T6 report + live UI on replay. 9/26-28 T7 evaluation (5 buggy + 5 clean + 2 third-party + 1 injection canary, about 3 USD). 9/29 vertical-slice line (URL -> missions -> execution -> a seeded bug found with evidence -> report) must already work. 9/30-10/2 hardening, degrade ladder ready (D-plan: multi-mission -> independent missions -> single mission). 10/3 freeze. 10/4-6 slides (5-6), one-page write-up, rehearsals on the real network or hotspot.
+
+**Gotchas to remember**
+- Playwright: any `page.aria_snapshot()` call invalidates the refs of an earlier `mode="ai"` snapshot; `capture_state` takes the plain one first and the AI one last. Nothing may snapshot between capture and execute.
+- Git Bash rewrites a leading `/` in arguments: `export MSYS_NO_PATHCONV=1` (or use PowerShell).
+- Never `taskkill /IM python.exe`; stop servers by PID or port (8765 for TaskBoard).
+- Git prints LF/CRLF warnings on Windows; harmless.
+- `docs/DECISIONS.md` task list: T1-T4 done; T5 next. Untested with a real model: prompts, Haiku structured outputs, thinking-disabled, price and token estimates.
+
+**Open questions for the owner (none blocks T5)**
+- Which third-party demo site for generality (default plan: a public TodoMVC-style app)? 
+- Presentation slot is assigned after the 25 Sep acknowledgement.
+
 ## 2026-09-21
 
 **Done**
@@ -39,7 +63,7 @@ Newest day first. Updated after every finished task (see CLAUDE.md working rules
 
 **Blockers / decisions needed**
 - The six design questions left open after T3 were ruled in D8 and are applied by T3b.
-- T4 assumptions to confirm (all in the T4 report): default mode is `real` when `PROBE_LLM_MODE` is unset; a model that is not in the price table is refused before the call (so the cost cap cannot be bypassed); `validate_decision` also rejects text on click/check/uncheck and does not check done/stuck; fake and replay take their file through the constructor argument `source` (no env variable defined yet).
+- T4 assumptions (ruled in D9: no default mode, explicit choice required; fake/replay file via `PROBE_LLM_SOURCE`): default mode was `real` when `PROBE_LLM_MODE` is unset; a model that is not in the price table is refused before the call (so the cost cap cannot be bypassed); `validate_decision` also rejects text on click/check/uncheck and does not check done/stuck; fake and replay take their file through the constructor argument `source` (no env variable defined yet).
 - Untested until the funded key exists: `thinking={"type": "disabled"}` on `claude-haiku-4-5` and structured outputs on Haiku 4.5 (D7 already lists Haiku as unverified; fallback is Sonnet 5 for steps via `PROBE_MODEL_STEP`).
-- One reading applied from D3, to confirm: a judge-only candidate whose outcome did not recur is Dropped (D3: "not reproduced and no signal"), and `judge_violated=True` no longer keeps it alive without reproduction.
-- API key not funded yet. Needed before the first LLM-dependent task (~2026-09-25). User will top up when the app is ready to use it.
+- Ruled in D9 (confirmed): a judge-only candidate whose outcome did not recur is Dropped (D3: "not reproduced and no signal"), and `judge_violated=True` no longer keeps it alive without reproduction.
+- API funded by the owner: 20 USD on 2026-09-21. Budget policy D9: total real spend cap 10 USD, layered enforcement; no real call before T5 is accepted and the console spend limit is set.

@@ -3,6 +3,8 @@
 Format: id, date, decision, rejected options, consequences, Q&A answer (say it out loud in plain words).
 Evidence and sources: `docs/RESEARCH.md`.
 
+**How to read this file.** Entries are chronological and later ones amend earlier ones; where they conflict, the higher number wins. Statements superseded on purpose (kept so the reasoning is traceable): D1 "element index" and D2 "custom JS extractor" and "tool use for structured output" -> D7 (ARIA-snapshot refs, `messages.parse` structured outputs); D3 tier wording -> D7 point 3 and D8 rulings; D4 "/__reset clears the trigger log" -> D8 ruling 5; D1/D2 default budgets -> D7 point 6 (profiles).
+
 ---
 
 ## D1 - Product shape: mission-based, evidence-backed runtime tester  (2026-09-21)
@@ -172,12 +174,39 @@ The text of the five prompts is in `docs/PROMPTS.md`. `StepDecision.ref` is vali
 
 ---
 
+## D9 - API budget, rulings on the T4 questions, and the T5 specification  (2026-09-21)
+
+**Budget policy.** The user funded 20 USD and does not want to spend it up: this is an interview presentation. Plan a **total real-API spend of at most 10 USD**, the other half is reserve. Rough split: prompt tuning and development runs 5, the evaluation (D4: 5 buggy + 5 clean + 2 third-party + 1 injection canary, about 13 runs) 3, rehearsals 2. Per-run cost is an *estimate* (0.10-0.20 USD from the SDK reference price table, unverified until the first real run), so the first real run is a single-mission `live` run with a 0.10 USD cap, used to measure real tokens.
+Enforcement in layers:
+1. **Console limit (user action):** set a workspace spend limit of 10-12 USD in the Anthropic Console. This is the only hard external stop; do it before the first real call.
+2. **Per-run cap:** `PROBE_MAX_COST_USD` default lowered from 1.00 to **0.30**.
+3. **Cumulative ledger (build in T5-0):** every real or record call appends its estimated cost to `runs/spend_ledger.jsonl`; before each real/record call the client sums the ledger and refuses if `PROBE_TOTAL_BUDGET_USD` (default **8**) would be exceeded.
+4. **No silent spend:** `PROBE_LLM_MODE` has **no default**; unset gives an error asking for fake | replay | record | real. The agent CLI needs `--yes-spend` for real and record, and prints the per-run cap first.
+5. **Cheap-first workflow:** develop and test with fake; record ONE good real run, then build the UI, report and rehearsal on `replay` at zero cost. No benchmark batch without the user saying go. No retries beyond the SDK's two.
+6. The `.env` file is created by the user locally from `.env.example`; the key is never pasted into chat, logs or commits.
+
+**Rulings on the T4 questions.** (1) A judge-only candidate whose outcome did not recur is Dropped, as D3 says. (2) A candidate with a flaky hard signal plus a contextual one is treated as hard: the judge cannot drop it; it stays Likely. (3) No default LLM mode (see above). (4) A model without a price entry is refused before the call: accepted. (5) `validate_decision` stays as built. (6) Fake and replay read their file from env `PROBE_LLM_SOURCE` (path) and the CLI flag `--llm-source`. (7) The small `.env` reader is accepted; environment variables win over `.env`.
+
+**T5 specification (`probe/agent.py`, fake LLM only; the real API is not used in T5).**
+- Entry: `run_test(base_url, profile, llm, out_dir, on_event=None, reset_path=None) -> RunResult`, plus CLI `python -m probe.agent --url URL --profile live|eval --out runs/NAME [--reset-path /__reset] --llm-source FILE [--yes-spend]`.
+- Profiles: `live` = 3 missions, 10 steps in total, 6 per mission, 90 s wall clock, replays 1. `eval` = 5 missions, 15 steps, 6 per mission, 180 s, replays 2. The clock is checked before every step and every LLM call; on expiry the run stops gracefully and is marked `timed_out` with whatever was found so far.
+- Plan limits are enforced here: missions trimmed to the profile maximum (at least 1, else error), capabilities trimmed to 6.
+- Per mission: fresh context, reset, load the start URL. Loop: `capture_state`, build the step prompt (mission; up to the last 4 steps as action, expect, changed lines, signal kinds; `render_for_llm(state)` inside the PAGE delimiters), `llm.call('step', ...)`, `validate_decision` (invalid: one retry with the error text appended, then end the mission as `stuck`), execute with a `SafetyPolicy(allowed_origin=base_url origin, budget=profile steps)`, record evidence and signals. `done` or `stuck` ends the mission. "What changed" = added and removed lines between `snapshot_plain` before and after, capped at 30 lines.
+- After each mission: build candidates from signals; one `judge` call (mission, per-step action / expect / changed lines / signals); apply `step_verdicts` to `judge_violated`; judge findings with kind bug and a cited step and no candidate there become `judge_only_candidate`; replay candidates up to the highest step they cite (signals or judge-only); for reproduced contextual-only survivors call `disprove` (mission, steps, signals, changed lines at the step) and pass `disproof_survived`; `classify`. Judge findings with kind improvement become tier Improvement, never replayed, never called a defect. Judge text (title, severity, impact, expected, observed, suggestion) attaches to the candidate at the same step; a signal candidate without judge text gets a title built from its signal detail.
+- Events, each a dict with `type`, `t` (seconds since start) and payload, passed to `on_event` and appended to `events.jsonl`: `run_started`, `plan`, `mission_started`, `step`, `mission_judged`, `finding` (with tier), `run_finished`.
+- Outputs in `out_dir`: `events.jsonl`, `evidence.json`, `findings.json` (all tiers, with the reason for each drop), `audit.json`, `report.json` (counts per tier, the Release Check verdict text, elapsed time, LLM calls, tokens, estimated cost, profile, `timed_out`), plus `llm_log.jsonl`.
+- **T5-0 first:** the budget guard of D9 items 2-4 in `probe/llm.py` and the CLI, with tests (ledger sum blocks the next call; unset mode errors; `--yes-spend` required).
+- Acceptance: with hand-written fake scripts under `tests/fixtures/` that play a sensible tester (and a second one that is sloppy: invalid ref once, a wrong click), one full `eval`-profile run on the buggy TaskBoard gives Confirmed S1 and Likely S2, S4, S5, judge-only S3 and S6 Likely, Improvement items separate; on `?bugs=off` zero Confirmed and zero Likely; the invalid-ref path retries once then continues or ends `stuck`; the timeout path returns partial results marked `timed_out`; events arrive in order; every LLM prompt in the fake run contains the PAGE delimiters. No socket is opened to the Anthropic API in any test. Mutation checks on the new rules.
+- Later, needs the funded key: T5b real-prompt tuning (first run: 1 mission, `live`, cap 0.10), T6 report + live UI (FastAPI, SSE, one HTML page) built on a recorded replay, T7 evaluation runner (with `?inject=on` canary), T8 slides, one-page write-up, rehearsals.
+
+---
+
 ## Tasks for /build (ordered; none needs an API key)
 
 - **T3 oracles, verifier, tiers** - DONE, `b3969c4`, 90 tests pass (independently re-run).
-- **T3b follow-ups (D8 rulings 1-7, 9)** plus the `/__reset` change. *Accept*: full script on `?bugs=off` gives zero Confirmed and zero Likely; buggy run still gives S1 Confirmed and S2/S4/S5 Likely; unit tests for each ruling; a judge-only candidate whose outcome fingerprint recurs is reproduced.
-- **T4 LLM client + schemas + prompts + record/replay/fake** as in D8. *Accept*: tests with an injected fake SDK object and a fake script pass; the real-mode call path is exercised against a stub that mimics `messages.parse`; usage/cost log and the cost cap are tested; prompts in code equal `docs/PROMPTS.md` (a test compares them). `pip install anthropic`, pin it in requirements.txt.
-- **T5 agent loop with fake LLM** (`probe/agent.py`). *Accept*: with a hand-written fake script that plays a sensible tester, one full run against the buggy TaskBoard yields Confirmed S1 and Likely items and an empty Confirmed list on the clean build; events are emitted per step.
+- **T3b follow-ups (D8 rulings 1-7, 9)** - DONE, `eae5490`, 112 tests. Original spec: plus the `/__reset` change. *Accept*: full script on `?bugs=off` gives zero Confirmed and zero Likely; buggy run still gives S1 Confirmed and S2/S4/S5 Likely; unit tests for each ruling; a judge-only candidate whose outcome fingerprint recurs is reproduced.
+- **T4 LLM client + schemas + prompts + record/replay/fake** - DONE, `56df798`, 167 tests (independently re-run). Original spec: as in D8. *Accept*: tests with an injected fake SDK object and a fake script pass; the real-mode call path is exercised against a stub that mimics `messages.parse`; usage/cost log and the cost cap are tested; prompts in code equal `docs/PROMPTS.md` (a test compares them). `pip install anthropic`, pin it in requirements.txt.
+- **T5 agent loop with fake LLM** (`probe/agent.py`) - NEXT; full spec in D9. *Accept*: with a hand-written fake script that plays a sensible tester, one full run against the buggy TaskBoard yields Confirmed S1 and Likely items and an empty Confirmed list on the clean build; events are emitted per step.
 - Needs the funded key: T5b real prompts tuning, T6 report + live UI (FastAPI + SSE + one HTML page), T7 evaluation runner (incl. `?inject=on` canary).
 
 ### Earlier task list (kept for reference; superseded by the list above where they differ)

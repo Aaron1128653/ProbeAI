@@ -33,4 +33,6 @@ Whole run should finish in about 2 minutes; UI streams every step as it happens.
 - Git is in use: one commit per finished task. Commit message = what and why. Never commit `.env`, `.venv/`, `runs/`.
 - After every finished task append to `docs/WORKLOG.md` (today's section: done / evidence / next / blockers). Do it continuously, not only at the end of the day.
 - Usage limits are not visible to the assistant. If a limit or low-usage message appears, or the user says so, stop new work and run `/wrapup`.
-- The API key is not funded yet. Build and test with the fake LLM until a task explicitly needs the real one; never hard-code keys; read `ANTHROPIC_API_KEY` from `.env`.
+- API money: the user funded 20 USD and wants most of it left (D9). Total real spend cap 10 USD; per-run cap 0.30; `PROBE_LLM_MODE` has no default and real/record runs need `--yes-spend`. Build and test with fake or replay; a real call needs an explicit go from the user. Never hard-code keys; the user creates `.env` locally; never print, log or commit the key.
+- Process safety: stop servers by PID or port, never `taskkill /IM python.exe` (other work runs on this machine).
+- Audit trail: everything is committed; `docs/AUDIT_GUIDE.md` maps commits to claims and lists what is self-reported versus independently re-run. Keep it current when a claim changes.
