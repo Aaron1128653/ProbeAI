@@ -139,7 +139,48 @@ Not adopted: nothing rejected outright. Already covered before this review: Safe
 
 ---
 
+## D8 - Rulings after T3, LLM contracts and the run loop  (2026-09-21)
+
+**Independently re-run:** 90 tests pass; scripted buggy run gives S1 Confirmed (http_5xx, 2/2) and S2/S4/S5 Likely, S3/S6 no candidate. **Clean build with the full script gave two Likely** (POST 422 and 409 that the UI handled correctly). That is a false-positive source and is fixed below.
+
+**Rulings on the T3 questions.**
+1. `http_4xx` fires only when the UI stayed silent: the step's fingerprint did not change. A 4xx that the page turned into a visible message is normal validation; a swallowed 4xx is the defect (S5). Same idea, sharper rule.
+2. `judge_violated=False` demotes a contextual-only candidate to Dropped (reason kept in `audit.json`). It never overrides a hard signal.
+3. Confirmed needs the signal to recur in **all** replays (n/n). A partial recurrence (1/2) is Likely, labelled flaky.
+4. The disprove pass runs only for contextual candidates. `disproof_survived=False` means Dropped. Hard-signal candidates skip it, since the evidence is deterministic.
+5. `POST /__reset` restores tasks only and **keeps the trigger log**; new `POST /__trigger_log/clear` clears the log (the eval runner calls it once at the start of each run). Update the T1 tests.
+6. Hard `request_failed` counts only same-origin requests; third-party failures stay in the evidence without a signal.
+7. The typed-text oracle compares at most the first 200 normalised characters.
+8. Over-blocking (e.g. a task named "Check out the mail") stays as accepted fail-safe.
+9. **Judge-only findings are reproduced by outcome**: replay the steps in a fresh context and compare `fingerprint_after` at the cited step with the original. Same visible outcome = reproduced. (S3, S6 land at Likely this way.)
+
+**Mission independence.** Each mission starts with a fresh browser context, `reset_path` call (if configured) and a load of the start URL. Replay then starts from exactly the same state as the exploration did. Step numbers in a mission count from 1.
+
+**LLM contracts.** Pydantic models, sent through `client.messages.parse(output_format=...)`; limits below are enforced in code after parsing, not in the schema.
+- `Mission`: id (m1..), goal, category (core_flow | input_validation | edge_case | feedback | state_change), priority (critical | high | medium | low), why.
+- `AppPlan`: app_type, capabilities (3-6 strings), missions (3-5).
+- `StepDecision`: action (click | type | check | uncheck | press | done | stuck), ref (or null), text (or null), expect (string), reasoning (one sentence).
+- `StepVerdict`: step (int), violated (bool), reason.
+- `JudgedFinding`: step (int or null), kind (bug | improvement), title, severity (low | medium | high), impact, expected, observed, suggestion.
+- `Judgement`: step_verdicts, findings.
+- `Disproof`: refuted (bool), reason.
+The text of the five prompts is in `docs/PROMPTS.md`. `StepDecision.ref` is validated against the current state's actionable refs; an invalid ref is one retry with the error appended, then the mission ends as `stuck`.
+
+**LLM client (`probe/llm.py`).** One entry point `call(role, system, user, schema)` returning the parsed object and a usage record. Roles `plan`, `step`, `judge`, `disprove` map to env vars `PROBE_MODEL_PLAN|STEP|JUDGE|DISPROVE` (defaults: sonnet-5 for plan, judge and disprove; haiku-4-5 for step; the API id strings are `claude-sonnet-5` and `claude-haiku-4-5`). Thinking is disabled or effort lowered for `step` and `judge`. `max_tokens`: plan 1500, step 400, judge 1500, disprove 300. Modes via `PROBE_LLM_MODE`: `real`, `record` (real, and saves every prompt and answer to `runs/<id>/llm_record.jsonl`), `replay` (serves answers from a record by role and call index; this is the labelled offline fallback for the live demo), `fake` (serves a hand-written JSON script; for tests). Every call is appended to `runs/<id>/llm_log.jsonl`: role, model, input tokens, output tokens, latency, estimated cost (price table in code, comment "check console"). `PROBE_MAX_COST_USD` (default 1.00) aborts a run that exceeds it. The client is constructed with an injectable SDK object so tests need no key or network.
+
+**Run loop (`probe/agent.py`, T5).** For each mission (cap by profile): fresh context and reset; loop up to 6 steps and the run-wide caps: capture state, `step` call, execute with SafetyPolicy, record evidence and signals, stream an event. `done`/`stuck` ends the mission. Then: build candidates, `judge` call, apply verdicts, replay candidates (n=2, or 1 in the live profile if time is short), `disprove` for contextual survivors, classify, stream findings. What the `step` and `judge` calls see about "what changed" is a line diff of `snapshot_plain` before/after (added and removed lines, capped), not the whole page.
+
+---
+
 ## Tasks for /build (ordered; none needs an API key)
+
+- **T3 oracles, verifier, tiers** - DONE, `b3969c4`, 90 tests pass (independently re-run).
+- **T3b follow-ups (D8 rulings 1-7, 9)** plus the `/__reset` change. *Accept*: full script on `?bugs=off` gives zero Confirmed and zero Likely; buggy run still gives S1 Confirmed and S2/S4/S5 Likely; unit tests for each ruling; a judge-only candidate whose outcome fingerprint recurs is reproduced.
+- **T4 LLM client + schemas + prompts + record/replay/fake** as in D8. *Accept*: tests with an injected fake SDK object and a fake script pass; the real-mode call path is exercised against a stub that mimics `messages.parse`; usage/cost log and the cost cap are tested; prompts in code equal `docs/PROMPTS.md` (a test compares them). `pip install anthropic`, pin it in requirements.txt.
+- **T5 agent loop with fake LLM** (`probe/agent.py`). *Accept*: with a hand-written fake script that plays a sensible tester, one full run against the buggy TaskBoard yields Confirmed S1 and Likely items and an empty Confirmed list on the clean build; events are emitted per step.
+- Needs the funded key: T5b real prompts tuning, T6 report + live UI (FastAPI + SSE + one HTML page), T7 evaluation runner (incl. `?inject=on` canary).
+
+### Earlier task list (kept for reference; superseded by the list above where they differ)
 
 - **T1 Demo app "TaskBoard"** - DONE, commit `1eabe27`, 15 tests pass. Follow-ups (fold into T2): S4 logs only when overflow manifests; `ground_truth.json` uses `signature_any` synonym lists.
 - **T2 Harness** - DONE, commit `804c2b2`, 39 tests pass (independently re-run). ORIGINAL SPEC, superseded by D7 where they differ: page-state extractor with numbered elements, step executor by index that records a semantic locator, evidence recorder (console, pageerror, requestfailed, >=400 responses, before/after screenshot, URL, text hash), safety policy (same origin, step budget, blocked patterns). *Accept*: a scripted step list (no LLM) against TaskBoard writes an evidence JSON that shows the S1 `DELETE ... 500`.
