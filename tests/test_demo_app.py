@@ -7,17 +7,12 @@ correctly and leave the trigger log empty.
 """
 import json
 import re
-import socket
-import subprocess
-import sys
 import time
-import urllib.request
-from pathlib import Path
 
 import pytest
-from playwright.sync_api import expect, sync_playwright
+from playwright.sync_api import expect
 
-ROOT = Path(__file__).resolve().parent.parent
+from conftest import ROOT, http
 
 LONG_SENTENCE = " ".join(["long"] * 40)  # 159 characters with spaces
 LONG_WORD = "x" * 200                    # 200 characters, no spaces to wrap at
@@ -25,21 +20,7 @@ OVERFLOWING_TITLE = " ".join(["long"] * 22)  # 109 characters: really overflows 
 FITS_TITLE = " ".join(["long"] * 14)         # 69 characters: over 60 but fits on the page
 
 
-# ---- fixtures and helpers -------------------------------------------------
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-def http(method: str, url: str, body=None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=5) as resp:
-        return resp.status, resp.read().decode()
-
+# ---- helpers (the server and browser fixtures live in conftest.py) ---------
 
 def trigger_ids(base: str) -> list[str]:
     _, text = http("GET", base + "/__trigger_log")
@@ -58,38 +39,6 @@ def wait_for_trigger(base: str, trigger_id: str, timeout: float = 3.0) -> bool:
 def assert_log_empty(base: str):
     time.sleep(0.3)  # the client posts S4/S6 asynchronously; give it time to arrive
     assert trigger_ids(base) == []
-
-
-@pytest.fixture(scope="session")
-def server():
-    port = free_port()
-    base = f"http://127.0.0.1:{port}"
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "demo_app.server:app",
-         "--port", str(port), "--log-level", "warning"],
-        cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        deadline = time.time() + 15
-        while True:
-            assert proc.poll() is None, "uvicorn exited during start-up"
-            try:
-                http("GET", base + "/__trigger_log")
-                break
-            except OSError:
-                assert time.time() < deadline, "server did not start in 15 s"
-                time.sleep(0.1)
-        yield base
-    finally:
-        proc.terminate()
-        proc.wait(timeout=10)
-
-
-@pytest.fixture(scope="session")
-def browser():
-    with sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
-        yield b
-        b.close()
 
 
 @pytest.fixture

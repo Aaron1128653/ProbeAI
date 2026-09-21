@@ -1,0 +1,7 @@
+[
+  {
+    "action": "click",
+    "target": {"role": "button", "name": "Delete Buy milk", "nth": 0},
+    "expect": "the task 'Buy milk' disappears from the list"
+  }
+]
