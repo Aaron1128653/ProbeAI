@@ -4,7 +4,9 @@ Run:  python -m uvicorn demo_app.server:app --port 8765
 Page: /  (buggy build)   or   /?bugs=off  (clean build)
 
 The client adds the same ?bugs=... query to every API call, so each request tells the
-server which build it belongs to. State lives in memory; /__reset restores it.
+server which build it belongs to. State lives in memory; /__reset restores the tasks and keeps the
+trigger log (replays reset the tasks many times, the log is the ground truth for a whole run);
+/__trigger_log/clear empties the log.
 The handlers are `async def` on purpose: they never await, so each one runs to the end
 without interruption and no locking is needed.
 """
@@ -27,10 +29,9 @@ next_id = 1
 
 
 def reset_state():
-    """Back to the two seed tasks and an empty trigger log."""
+    """Back to the two seed tasks. The trigger log is left alone."""
     global next_id
     tasks.clear()
-    trigger_log.clear()
     next_id = 1
     for title in ("Buy milk", "Write report"):
         tasks.append({"id": next_id, "title": title, "done": False})
@@ -149,4 +150,10 @@ async def post_trigger(body: Trigger):
 @app.post("/__reset")
 async def reset():
     reset_state()
+    return {"ok": True}
+
+
+@app.post("/__trigger_log/clear")
+async def clear_trigger_log():
+    trigger_log.clear()
     return {"ok": True}

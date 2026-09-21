@@ -1,11 +1,11 @@
 """Replay (probe/verify.py): fresh contexts, reset, and what counts as "reproduced"."""
 import pytest
 
-from conftest import http, make_record
+from conftest import http, make_evidence, make_record
 from probe.browser import new_context
 from probe.executor import Step, run_steps
 from probe.oracles import Signal
-from probe.verify import ReplayResult, replay, reproduced, steps_from_records
+from probe.verify import ReplayResult, replay, reproduced, reproduced_by_outcome, steps_from_records
 
 CLEAN = "/?bugs=off"
 DELETE_STEP = Step("click", {"role": "button", "name": "Delete Buy milk"})
@@ -41,6 +41,35 @@ def test_reproduced_needs_the_same_kind_the_same_key_and_the_same_step():
 
 def test_a_replay_that_raises_the_signal_twice_still_counts_once():
     assert reproduced(signal(), [result(1, signal(), signal())]) == 1
+
+
+# ---- reproduced_by_outcome(): findings without a signal (D8 ruling 9) ----------------------
+
+def outcome_result(n: int, *fingerprints_after: str) -> ReplayResult:
+    """A replay whose steps 1, 2, ... ended in these pages."""
+    return ReplayResult(n, [make_evidence(step=i, fp_after=fp) for i, fp in enumerate(fingerprints_after, start=1)], [])
+
+
+def test_reproduced_by_outcome_counts_replays_where_the_cited_step_ends_in_the_same_page():
+    original = make_evidence(step=2, fp_after="page-A")
+    same = outcome_result(1, "x", "page-A")
+    different = outcome_result(2, "x", "page-B")
+    assert reproduced_by_outcome(original, [same, different]) == 1
+    assert reproduced_by_outcome(original, [same, same]) == 2
+    assert reproduced_by_outcome(original, [different]) == 0
+    assert reproduced_by_outcome(original, []) == 0
+
+
+def test_reproduced_by_outcome_looks_at_the_cited_step_only_and_a_short_replay_does_not_count():
+    original = make_evidence(step=2, fp_after="page-A")
+    other_step_matches = outcome_result(1, "page-A", "page-B")   # step 1 matches, step 2 does not
+    stopped_early = outcome_result(2, "x")                       # never reached step 2
+    assert reproduced_by_outcome(original, [other_step_matches, stopped_early]) == 0
+
+    ran_further = outcome_result(3, "x", "page-A", "later-page")  # step 2 matches, later steps differ
+    matches_later_only = outcome_result(4, "x", "y", "page-A")    # step 3 matches, step 2 does not
+    assert reproduced_by_outcome(original, [ran_further]) == 1
+    assert reproduced_by_outcome(original, [matches_later_only]) == 0
 
 
 # ---- steps_from_records() --------------------------------------------------------

@@ -1,10 +1,12 @@
 """Oracles: turn what the browser recorded for one step into signals. Plain rules, no LLM.
 
 Hard signals are things a working app should not do, whatever the user wanted:
-  page_error (uncaught JavaScript error), request_failed (network failure), http_5xx (same origin).
+  page_error (uncaught JavaScript error), request_failed (network failure, same origin only),
+  http_5xx (same origin).
 Contextual signals can be perfectly fine behaviour, depending on intent, so they need more support
 before they count as a bug:
-  http_4xx (same origin), no_effect, state_not_reached, overflow, console_error.
+  http_4xx (same origin, and only when the page stayed silent), no_effect, state_not_reached,
+  overflow, console_error.
 """
 import re
 from dataclasses import asdict, dataclass
@@ -60,9 +62,15 @@ def _target(record: StepRecord) -> str:
 
 
 def _request_signals(evidence: StepEvidence, base_origin: str) -> list[Signal]:
+    """Only requests to the app's own origin can raise a signal; a third-party failure stays in the
+    evidence. A 4xx counts only when the page stayed silent (same fingerprint before and after the
+    step): a 4xx that the page turned into a visible message is normal validation (D8 ruling 1)."""
     step, signals = evidence.step, []
+    ui_silent = evidence.fingerprint_before == evidence.fingerprint_after
     for r in evidence.requests:
         method, url, status = r["method"], r["url"], r["status"]
+        if origin_of(url) != origin_of(base_origin):
+            continue
         where = f"{method} {urlsplit(url).path}"
         if status is None:  # the request never got an answer
             error = r["error"] or ""
@@ -70,11 +78,12 @@ def _request_signals(evidence: StepEvidence, base_origin: str) -> list[Signal]:
                 continue  # the page moved on or cancelled it itself
             signals.append(_signal("request_failed", step, f"{where} failed: {error}",
                                    _request_key(method, url, "failed")))
-        elif origin_of(url) == origin_of(base_origin):
-            kind = "http_5xx" if status >= 500 else "http_4xx" if status >= 400 else None
-            if kind:
-                signals.append(_signal(kind, step, f"{where} answered {status}",
-                                       _request_key(method, url, str(status))))
+        elif status >= 500:
+            signals.append(_signal("http_5xx", step, f"{where} answered {status}",
+                                   _request_key(method, url, str(status))))
+        elif status >= 400 and ui_silent:
+            signals.append(_signal("http_4xx", step, f"{where} answered {status} and the page showed nothing",
+                                   _request_key(method, url, str(status))))
     return signals
 
 
@@ -107,7 +116,7 @@ def _state_not_reached(evidence: StepEvidence, record: StepRecord, state_after: 
             return None
         detail = f'{record.action} requested on {_target(record)}, but it is {"checked" if entry.checked else "unchecked"} afterwards'
     else:
-        typed, held = _squeeze(record.text), _squeeze(entry.value)
+        typed, held = _squeeze(record.text)[:200], _squeeze(entry.value)[:200]  # long values: first 200 characters
         if entry.value is None or typed == held:
             return None
         if any(r["status"] is not None and 200 <= r["status"] < 300 for r in evidence.requests):

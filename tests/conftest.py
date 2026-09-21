@@ -36,6 +36,13 @@ def http(method: str, url: str, body=None):
         return resp.status, resp.read().decode()
 
 
+def fresh_app(base: str):
+    """Seed tasks back and an empty trigger log. /__reset alone keeps the log (D8), so tests that
+    read the log call this."""
+    http("POST", base + "/__reset")
+    http("POST", base + "/__trigger_log/clear")
+
+
 @pytest.fixture(scope="session")
 def server():
     port = free_port()

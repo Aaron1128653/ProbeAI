@@ -45,6 +45,18 @@ def test_network_failure_is_hard_but_aborted_requests_are_ignored():
     assert "request_failed" not in kinds(detect(aborted))
 
 
+def test_a_failed_request_to_somebody_elses_server_is_no_signal():
+    """D8 ruling 6: a hard signal must be the app's own doing. The failure stays in the evidence only."""
+    other = make_evidence(requests=[req("GET", "https://cdn.example/lib.js", None, "net::ERR_CONNECTION_REFUSED"),
+                                    req("GET", "https://tracker.example/p.gif", None, "net::ERR_BLOCKED_BY_CLIENT")])
+    assert kinds(detect(other)) == []
+    assert len(other.requests) == 2  # still recorded
+
+    mixed = make_evidence(requests=[req("GET", "https://cdn.example/lib.js", None, "net::ERR_FAILED"),
+                                    req("GET", APP + "/api/tasks", None, "net::ERR_FAILED")])
+    assert [(s.kind, s.key) for s in detect(mixed)] == [("request_failed", "GET /api/tasks failed")]
+
+
 def test_5xx_is_hard_on_the_same_origin_only():
     same = make_evidence(requests=[req("DELETE", DELETE_URL, 500)])
     [signal] = [s for s in detect(same) if s.kind == "http_5xx"]
@@ -66,11 +78,29 @@ def test_keys_replace_numeric_and_uuid_path_segments():
 
 # ---- contextual signals ----------------------------------------------------------
 
+SILENT = dict(fp_before="same", fp_after="same")  # the page did not react to the step
+
+
 def test_4xx_is_contextual_and_same_origin_only():
     ev = make_evidence(requests=[req("POST", APP + "/api/tasks?bugs=off", 409),
-                                 req("GET", "https://cdn.example/x", 404)])
+                                 req("GET", "https://cdn.example/x", 404)], **SILENT)
     signals = [s for s in detect(ev) if s.kind == "http_4xx"]
     assert [(s.strength, s.key) for s in signals] == [("contextual", "POST /api/tasks 409")]
+
+
+def test_4xx_fires_only_when_the_page_stayed_silent():
+    """D8 ruling 1: a 4xx the page turned into a visible message is normal validation (clean build);
+    a swallowed 4xx is the defect (S5)."""
+    request = req("POST", APP + "/api/tasks", 409)
+    silent = detect(make_evidence(requests=[request], **SILENT))
+    assert [(s.kind, s.key) for s in silent] == [("http_4xx", "POST /api/tasks 409")]
+
+    reacted = detect(make_evidence(requests=[request], fp_before="before", fp_after="after"))
+    assert reacted == []
+
+    # 5xx is hard and does not depend on what the page did
+    crashed = make_evidence(requests=[req("DELETE", DELETE_URL, 500)], fp_before="before", fp_after="after")
+    assert kinds(detect(crashed)) == ["http_5xx"]
 
 
 def test_hard_and_contextual_split():
@@ -80,7 +110,7 @@ def test_hard_and_contextual_split():
         requests=[req("GET", APP + "/a", None, "net::ERR_FAILED"), req("GET", APP + "/b", 500),
                   req("GET", APP + "/c", 404)],
         console=[{"type": "error", "text": "oops", "resource_load_error": False, "url": None}],
-        scroll_width=1500, client_width=1280)
+        scroll_width=1500, client_width=1280, **SILENT)
     strengths = {s.kind: s.strength for s in detect(ev)}
     assert strengths == {"page_error": "hard", "request_failed": "hard", "http_5xx": "hard",
                          "http_4xx": "contextual", "overflow": "contextual", "console_error": "contextual"}
@@ -139,6 +169,22 @@ def test_textbox_that_does_not_hold_the_typed_text_afterwards():
     assert detect(cleared_by_page, record, after=empty) == []  # a request succeeded: the page took the text
     failed_request = make_evidence(record, requests=[req("POST", APP + "/api/tasks", 500)])
     assert kinds(detect(failed_request, record, after=empty)) == ["http_5xx", "state_not_reached"]
+
+
+def test_the_typed_text_is_compared_on_its_first_200_characters_only():
+    """D8 ruling 7: a field or a snapshot may cut a long value; the start must still match."""
+    typed = "word " * 80  # 400 characters
+    record = make_record("type", "textbox", "New task", text=typed)
+    evidence = make_evidence(record)
+
+    cut_short = make_state([make_entry("textbox", "New task", value=typed.strip()[:230])])
+    assert detect(evidence, record, after=cut_short) == []  # same first 200 characters, ends differ
+
+    wrong_start = make_state([make_entry("textbox", "New task", value="oops " + typed[5:].strip())])
+    assert kinds(detect(evidence, record, after=wrong_start)) == ["state_not_reached"]
+
+    beyond_200 = make_state([make_entry("textbox", "New task", value=typed.strip()[:200] + " changed later")])
+    assert detect(evidence, record, after=beyond_200) == []  # a difference after character 200 is not looked at
 
 
 def test_overflow_signal_and_its_note_when_it_was_there_before():

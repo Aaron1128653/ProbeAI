@@ -63,3 +63,20 @@ For each part of the system: what it does, why it is built this way, how to say 
 - Tiers come from rules, never from a model's confidence: **Confirmed** = reproduced and (a hard signal, or a contextual signal that survived the disprove pass). **Likely** = reproduced with contextual evidence only, or seen once but not reproduced (labelled so). **Dropped** = no signal and not reproduced.
 - The two AI judgements (was the expectation violated? did it survive the disprove pass?) are inputs that are empty for now, so contextual-only findings top out at Likely today. `audit.json` lists every candidate, every merged duplicate and every step that raised nothing, with the reason.
 - S3 (blank title) and S6 (wrong counter) give no candidate on purpose: no rule can see them, they need the AI judge later.
+
+## T3b - Rulings applied (`probe/oracles.py`, `probe/findings.py`, `probe/verify.py`, `demo_app/server.py`)
+
+**oracles.py**
+- A 4xx answer now counts only when the page stayed silent. On the clean TaskBoard a blank title gets a 422 and a duplicate gets a 409, but the page shows a message, so nothing is reported. In the buggy build the duplicate 409 is swallowed (nothing on screen changes), and that is the defect. "Did the page react" is the same before/after fingerprint we already use for "nothing happened".
+- A failed request only counts as a hard signal when it goes to the app's own server. A blocked tracker or a dead CDN stays in the evidence but does not raise an alarm. When checking typed text, only the first 200 characters are compared, so a field that legitimately cuts a very long value is not a false alarm.
+
+**findings.py**
+- "Confirmed" now needs the signal in every replay (2 of 2), not just one. Once in a while (1 of 2) it is "Likely, flaky". Reason: one repeat is not proof.
+- The judge can knock a contextual-only candidate down to "Dropped" ("this is normal behaviour") and so can the disprove pass ("I found a harmless explanation"). Neither can touch a hard signal such as a server 500: that is a measurement, not an opinion. Dropped items stay in `audit.json` with the reason.
+- A judge-only finding has no signal, so there is nothing to compare. A candidate can now be made from one: it counts as reproduced when, after replaying the steps in a fresh browser, the page looks the same at that step.
+
+**verify.py**
+- `reproduced_by_outcome`: for findings with no signal, replay and compare the page fingerprint after the cited step. Same look = reproduced. It compares that step only, and a replay that stopped earlier counts as "did not come back".
+
+**demo_app**
+- `/__reset` now puts the tasks back but keeps the ground-truth log, because every replay calls it and it would otherwise wipe the record of what the first run triggered. `/__trigger_log/clear` empties the log; the evaluation runner calls it once at the start of each run.

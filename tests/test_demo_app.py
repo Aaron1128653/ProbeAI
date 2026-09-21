@@ -12,7 +12,7 @@ import time
 import pytest
 from playwright.sync_api import expect
 
-from conftest import ROOT, http
+from conftest import ROOT, fresh_app, http
 
 LONG_SENTENCE = " ".join(["long"] * 40)  # 159 characters with spaces
 LONG_WORD = "x" * 200                    # 200 characters, no spaces to wrap at
@@ -43,8 +43,8 @@ def assert_log_empty(base: str):
 
 @pytest.fixture
 def page(server, browser):
-    """A fresh page on a freshly reset app."""
-    http("POST", server + "/__reset")
+    """A fresh page on a freshly reset app with an empty trigger log."""
+    fresh_app(server)
     context = browser.new_context()  # default 1280x720 viewport
     yield context.new_page()
     context.close()
@@ -256,14 +256,24 @@ def test_clean_add_and_filters_work(server, page):
 
 # ---- ground truth plumbing ------------------------------------------------
 
-def test_reset_restores_seeds_and_clears_trigger_log(server, page):
+def test_reset_restores_the_tasks_and_keeps_the_trigger_log(server, page):
     page.goto(server + "/")
     add_task(page, "   ")
     assert wait_for_trigger(server, "S3")
     http("POST", server + "/__reset")
-    assert trigger_ids(server) == []
+    assert "S3" in trigger_ids(server)  # ground truth survives the resets that replays do
     _, text = http("GET", server + "/api/tasks")
     assert [t["title"] for t in json.loads(text)] == ["Buy milk", "Write report"]
+
+
+def test_trigger_log_clear_empties_the_log_and_leaves_the_tasks(server, page):
+    page.goto(server + "/")
+    add_task(page, "   ")
+    assert wait_for_trigger(server, "S3")
+    status, _ = http("POST", server + "/__trigger_log/clear")
+    assert status == 200 and trigger_ids(server) == []
+    _, text = http("GET", server + "/api/tasks")
+    assert len(json.loads(text)) == 3  # the blank task added above is still there
 
 
 def test_ground_truth_file_is_well_formed():

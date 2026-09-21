@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from conftest import http, load_steps
+from conftest import fresh_app, http, load_steps
 from probe import executor
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder
@@ -24,8 +24,8 @@ CLEAN = "/?bugs=off"
 
 @pytest.fixture
 def page(server, browser):
-    """A fresh context and page on a freshly reset app."""
-    http("POST", server + "/__reset")
+    """A fresh context and page on a freshly reset app with an empty trigger log."""
+    fresh_app(server)
     context = new_context(browser)
     yield context.new_page()
     context.close()

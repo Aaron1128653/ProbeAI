@@ -2,6 +2,9 @@
 
 No LLM. Replay uses only the recorded role + name + nth of each step. The reset call (if the app
 has one) gives every replay the same starting state as the first run.
+
+Two ways to say "it came back": a signal recurs (reproduced), or, for a finding the judge made
+without any signal, the same step ends in the same visible page (reproduced_by_outcome).
 """
 import tempfile
 from dataclasses import dataclass
@@ -57,3 +60,15 @@ def reproduced(signal: Signal, results: list[ReplayResult]) -> int:
     return sum(
         1 for result in results
         if any(s.kind == signal.kind and s.key == signal.key and s.step == signal.step for s in result.signals))
+
+
+def reproduced_by_outcome(original: StepEvidence, results: list[ReplayResult]) -> int:
+    """For a finding with no signal (only the judge saw it): in how many replays the cited step ended
+    in the same visible page, i.e. the same fingerprint_after. The replays must have run at least up
+    to that step; a replay that stopped earlier counts as "did not recur"."""
+    count = 0
+    for result in results:
+        again = next((e for e in result.evidence if e.step == original.step), None)
+        if again is not None and again.fingerprint_after == original.fingerprint_after:
+            count += 1
+    return count
