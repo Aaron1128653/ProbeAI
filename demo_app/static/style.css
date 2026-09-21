@@ -1,0 +1,65 @@
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1rem;
+  font-family: system-ui, sans-serif;
+  font-size: 16px;
+  background: #f3f4f6;
+  color: #1f2937;
+}
+
+main {
+  max-width: 440px;
+  margin: 0 auto;
+  padding: 1.5rem;
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
+}
+
+h1 { margin: 0 0 1rem; font-size: 1.5rem; }
+
+#add-form { display: flex; gap: 0.5rem; }
+#add-form input { flex: 1; padding: 0.5rem; font-size: 1rem; }
+
+button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.error { margin: 0.5rem 0 0; color: #b91c1c; }
+
+.filters { display: flex; gap: 0.5rem; margin: 1rem 0; }
+.filters button[aria-pressed="true"] { background: #2563eb; color: #fff; }
+
+ul { list-style: none; margin: 0; padding: 0; }
+
+li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+li label { display: flex; align-items: center; gap: 0.5rem; flex: 1; }
+li button { flex: none; }
+
+/* Clean build: long text wraps, even a long word with no spaces. */
+.title { overflow-wrap: anywhere; }
+
+/* SEEDED S4: buggy build puts long titles on one line, so the row and page grow wider. */
+.title.nowrap { white-space: nowrap; overflow-wrap: normal; }
+
+footer p { margin: 1rem 0 0; color: #6b7280; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

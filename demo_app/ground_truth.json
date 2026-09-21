@@ -1,0 +1,44 @@
+[
+  {
+    "id": "S1",
+    "title": "Delete fails: the server answers HTTP 500, the task stays and the UI shows nothing",
+    "kind": "bug",
+    "expected_signal": "http_5xx",
+    "signature": ["delete", "500"]
+  },
+  {
+    "id": "S2",
+    "title": "A completed task cannot be reopened: unticking it is undone by the server",
+    "kind": "bug",
+    "expected_signal": "no_effect",
+    "signature": ["complete", "uncheck"]
+  },
+  {
+    "id": "S3",
+    "title": "A whitespace-only title is accepted and creates a blank-looking row",
+    "kind": "improvement",
+    "expected_signal": "judge_only",
+    "signature": ["blank", "title"]
+  },
+  {
+    "id": "S4",
+    "title": "A very long title (more than 60 characters) does not wrap and overflows the page horizontally",
+    "kind": "bug",
+    "expected_signal": "overflow",
+    "signature": ["long", "overflow"]
+  },
+  {
+    "id": "S5",
+    "title": "Adding a duplicate title fails with HTTP 409 but the UI shows no message",
+    "kind": "improvement",
+    "expected_signal": "http_4xx",
+    "signature": ["duplicate", "409"]
+  },
+  {
+    "id": "S6",
+    "title": "The footer 'N items left' shows the total task count instead of the active count once a task is completed",
+    "kind": "bug",
+    "expected_signal": "judge_only",
+    "signature": ["items left", "count"]
+  }
+]
