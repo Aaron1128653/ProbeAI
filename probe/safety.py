@@ -5,10 +5,24 @@ In-app create / update / delete is allowed on purpose (the target is declared as
 import re
 from urllib.parse import urlsplit
 
+# Regular expressions, matched case-insensitively against the element's accessible name.
+# Words may sit in between ("delete my account") and words may be inflected ("uploads",
+# "downloading"). Over-blocking is accepted: a task called "Pay rent" gets its controls blocked.
+GAP = r"\W+(?:\w+\W+){0,2}"  # up to two extra words between the two words of a phrase
 DEFAULT_BLOCKED_PATTERNS = [
-    "delete account", "close account", "deactivate", "pay", "purchase", "buy now",
-    "place order", "checkout", "send email", "unsubscribe all",
-    "publish", "upload", "download",
+    rf"\bdelet\w*{GAP}account",
+    rf"\bclos\w*{GAP}account",
+    r"\bdeactivat",
+    r"\bpay",
+    r"\bpurchas",
+    rf"\bbuy\w*{GAP}now",
+    rf"\bplac\w*{GAP}order",
+    r"\bcheck\W?out\b",
+    rf"\bsend\w*{GAP}e-?mail",
+    rf"\bunsubscrib\w*{GAP}all",
+    r"\bpublish",
+    r"\bupload",
+    r"\bdownload",
 ]
 
 
@@ -22,7 +36,7 @@ class SafetyPolicy:
                  blocked_patterns: list[str] = DEFAULT_BLOCKED_PATTERNS):
         self.allowed_origin = origin_of(allowed_origin)
         self.max_steps = max_steps
-        self.blocked_patterns = list(blocked_patterns)
+        self.blocked_patterns = [re.compile(p, re.IGNORECASE) for p in blocked_patterns]
         self.steps_used = 0
 
     def check(self, step, element, state) -> tuple[bool, str]:
@@ -41,12 +55,18 @@ class SafetyPolicy:
 
         name = element.name if element else step.target.get("name", "")
         role = element.role if element else step.target.get("role", "")
-        if step.action == "type" and role == "textbox" and "password" in name.lower():
+        if step.action in ("type", "press") and role == "textbox" and "password" in name.lower():
             return False, f'typing into a password field is not allowed: "{name}"'
 
         for pattern in self.blocked_patterns:
-            # whole words only, so "pay" blocks "Pay now" but not "Display settings"
-            if re.search(rf"\b{re.escape(pattern)}\b", name, re.IGNORECASE):
-                return False, f'element "{name}" matches blocked pattern "{pattern}"'
+            if pattern.search(name):
+                return False, f'element "{name}" matches blocked pattern {pattern.pattern!r}'
 
+        return True, ""
+
+    def check_field(self, step, input_type: str | None) -> tuple[bool, str]:
+        """Second look once the element is on hand. The accessibility snapshot hides type=password,
+        the element's own `type` attribute does not. Does not use up budget."""
+        if step.action in ("type", "press") and (input_type or "").strip().lower() == "password":
+            return False, "typing into a password field is not allowed (input type=password)"
         return True, ""

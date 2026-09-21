@@ -58,6 +58,14 @@ def _resolve(page, step: Step, locator: dict):
     return page.get_by_role(locator["role"], name=locator["name"], exact=True).nth(locator["nth"])
 
 
+def _blocked_field(locator, step: Step, policy) -> str:
+    """The policy's second look at a field we are about to type into. Returns the reason, or ""."""
+    if policy is None or step.action not in ("type", "press"):
+        return ""
+    allowed, reason = policy.check_field(step, locator.get_attribute("type", timeout=ACTION_TIMEOUT_MS))
+    return "" if allowed else reason
+
+
 def _perform(locator, step: Step):
     if step.action == "click":
         locator.click(timeout=ACTION_TIMEOUT_MS)
@@ -105,10 +113,14 @@ def execute_step(page, state: PageState, step: Step, recorder=None, policy=None)
             if locator.count() == 0:
                 record.error = f"element not found: {record.locator}"
             else:
-                _perform(locator, step)
+                record.blocked = _blocked_field(locator, step, policy) or None
+                if record.blocked is None:
+                    _perform(locator, step)
         except PlaywrightError as exc:
             record.error = str(exc).splitlines()[0]  # first line only, the rest is Playwright's call log
         record.action_ms = round((time.monotonic() - started) * 1000)
+        if record.blocked:
+            return record  # nothing was done, nothing to wait for
 
     started = time.monotonic()
     if recorder is not None:

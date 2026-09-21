@@ -15,7 +15,8 @@ from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder
 from probe.executor import Step, execute_step
 from probe.run_script import run
 from probe.safety import SafetyPolicy
-from probe.state import PageState, RefEntry, capture_state, parse_refs, render_for_llm
+from probe.state import (PLAIN_CAP, SNAPSHOT_CAP, PageState, RefEntry, capture_state, parse_refs,
+                         render_for_llm)
 
 BUGGY = "/"
 CLEAN = "/?bugs=off"
@@ -86,6 +87,20 @@ def test_capture_state_finds_the_taskboard_refs_and_roles(server, page):
     text = render_for_llm(state)
     assert "untrusted data" in text and "<<<PAGE" in text and text.endswith("PAGE>>>")
     assert state.snapshot_ai in text
+
+
+def test_snapshots_are_capped_but_the_fingerprint_sees_the_whole_page(server, page):
+    def state_with_tail(tail: str) -> PageState:
+        page.goto(server + CLEAN)
+        page.set_content("".join(f"<p>filler line {i}</p>" for i in range(2500)) + f"<p>{tail}</p>")
+        return capture_state(page)
+
+    a, b = state_with_tail("tail A"), state_with_tail("tail B")
+    marker = "(snapshot truncated)"
+    assert a.snapshot_plain.endswith(marker) and len(a.snapshot_plain) <= PLAIN_CAP + 40
+    assert a.snapshot_ai.endswith(marker) and len(a.snapshot_ai) <= SNAPSHOT_CAP + 40
+    assert "tail A" not in a.snapshot_plain  # cut off
+    assert a.fingerprint != b.fingerprint    # but the fingerprint still saw it
 
 
 def test_parse_refs_reads_the_snapshot_forms():
@@ -402,24 +417,60 @@ def test_safety_blocks_links_that_leave_the_origin():
     assert not check(policy, fake_entry("Docs", "link", href="http://app.test:9999/x"))[0]  # other port
 
 
-def test_safety_blocks_dangerous_names_but_allows_in_app_crud():
+BLOCKED_NAMES = [
+    "Delete account", "Delete my account", "Deleting your account permanently", "Close my account",
+    "DEACTIVATE profile", "Deactivating", "Pay now", "Payments", "Purchase", "Purchases", "Buy now", "Buy it now",
+    "Place order", "Place your order", "Checkout", "Proceed to check out", "Send email", "Send an e-mail",
+    "Unsubscribe all", "Unsubscribe from all", "Publish post", "Published", "Upload file", "Uploads",
+    "Download report", "Downloading",
+]
+ALLOWED_NAMES = [
+    "Delete Buy milk", "Delete Write report", "Delete", "Add", "Buy milk", "Display settings",
+    "Remove item", "Send report", "Close", "Check the list", "Account settings",
+]
+
+
+def test_safety_blocks_dangerous_names_with_gaps_and_inflections():
     policy = SafetyPolicy(APP)
-    for name in ("Delete account", "DEACTIVATE profile", "Pay now", "Proceed to checkout",
-                 "Publish post", "Upload file", "Download report"):
+    for name in BLOCKED_NAMES:
         assert not check(policy, fake_entry(name))[0], name
-    for name in ("Delete Buy milk", "Delete", "Display settings", "Add"):
-        assert check(policy, fake_entry(name))[0], name  # "pay" inside "Display" is not "pay"
-    allowed, reason = check(policy, fake_entry("Delete account"))
-    assert 'matches blocked pattern "delete account"' in reason
 
 
-def test_safety_blocks_typing_into_password_fields():
+def test_safety_allows_in_app_crud_and_ordinary_names():
+    policy = SafetyPolicy(APP)
+    for name in ALLOWED_NAMES:  # "pay" inside "Display" and "buy" without "now" are not dangerous
+        assert check(policy, fake_entry(name))[0], name
+    allowed, reason = check(policy, fake_entry("Delete my account"))
+    assert not allowed and 'matches blocked pattern' in reason
+
+
+def test_safety_blocks_typing_and_pressing_in_a_field_named_password():
     policy = SafetyPolicy(APP)
     password = fake_entry("Password", role="textbox")
-    allowed, reason = check(policy, password, action="type")
-    assert not allowed and "password" in reason
+    for action in ("type", "press"):
+        allowed, reason = check(policy, password, action=action)
+        assert not allowed and "password" in reason
     assert check(policy, password, action="click")[0]  # clicking into it is fine
     assert check(policy, fake_entry("Search", role="textbox"), action="type")[0]
+
+
+def test_password_field_is_blocked_by_its_real_type_attribute(server, page, tmp_path):
+    page.goto(server + CLEAN)
+    page.set_content('<input type="password" aria-label="Secret pin"><input aria-label="Search">')
+    recorder = EvidenceRecorder(page, tmp_path)
+    policy = SafetyPolicy(server)
+    state = capture_state(page)
+    assert state.refs[0].role == "textbox"  # the snapshot shows no sign of type=password
+    pin, search = ref_of(state, "textbox", "Secret pin"), ref_of(state, "textbox", "Search")
+
+    for action, text in (("type", "hunter2"), ("press", "a")):
+        record = execute_step(page, state, Step(action, {"ref": pin}, text=text), recorder, policy)
+        assert record.blocked and "password" in record.blocked and record.error is None
+        assert page.locator("input[type=password]").input_value() == ""  # nothing was typed
+
+    ok = execute_step(page, state, Step("type", {"ref": search}, text="cats"), recorder, policy)
+    assert ok.blocked is None and ok.error is None
+    assert page.get_by_role("textbox", name="Search").input_value() == "cats"
 
 
 def test_safety_uses_the_scripted_name_when_the_element_is_not_on_the_page():

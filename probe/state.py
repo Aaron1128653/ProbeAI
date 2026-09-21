@@ -11,7 +11,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urljoin
 
-SNAPSHOT_CAP = 6000  # characters of the AI snapshot the model gets to see
+SNAPSHOT_CAP = 6000   # characters of the AI snapshot the model gets to see
+PLAIN_CAP = 20000     # characters of the plain snapshot kept in the state (and so in evidence.json)
 
 ACTIONABLE_ROLES = {"button", "link", "textbox", "checkbox", "radio", "combobox",
                     "menuitem", "tab", "switch", "searchbox", "slider"}
@@ -113,8 +114,8 @@ def capture_state(page) -> PageState:
         url=url,
         title=title,
         snapshot_ai=snapshot_ai,
-        snapshot_plain=snapshot_plain,
-        fingerprint=hashlib.sha1(f"{url}\n{snapshot_plain}".encode("utf-8")).hexdigest(),
+        snapshot_plain=_cap(snapshot_plain, PLAIN_CAP),
+        fingerprint=hashlib.sha1(f"{url}\n{snapshot_plain}".encode("utf-8")).hexdigest(),  # whole text, not the capped copy
         refs=parse_refs(snapshot_ai, url),
         scroll_width=scroll_width,
         client_width=client_width,

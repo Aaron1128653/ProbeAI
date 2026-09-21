@@ -10,7 +10,7 @@
     "id": "S2",
     "title": "A completed task cannot be reopened: unticking it is undone by the server",
     "kind": "bug",
-    "expected_signal": "no_effect",
+    "expected_signal": "state_not_reached",
     "signature_any": ["complete", "completed", "reopen", "re-open", "untick", "uncheck", "un-check", "toggle", "done", "mark as active", "marked as done", "checkbox"]
   },
   {

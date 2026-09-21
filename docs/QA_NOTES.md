@@ -36,3 +36,11 @@ For each part of the system: what it does, why it is built this way, how to say 
 
 **run_script.py** (developer tool, no AI)
 - Runs a hand-written list of steps and writes `evidence.json` plus screenshots. It proves the harness works before any AI is involved: the delete step shows `DELETE /api/tasks/1 -> 500` on the buggy build and `200` on the clean one.
+
+## T2 fixes after review (`probe/safety.py`, `probe/executor.py`, `probe/state.py`)
+
+- **Passwords:** the accessibility outline hides that a box is a password box, so before typing (or pressing a key) the tester also reads the box's real `type` attribute from the page and refuses if it says password. The name check ("Password") stays as a second net. This covers typing and key presses.
+- **Dangerous buttons:** the block list is now a list of patterns, not exact words. Words may sit in between ("Delete my account") and endings may vary ("Uploads", "Downloading"). It deliberately over-blocks: a task called "Pay rent" would have its own buttons blocked. Safer to skip a control than to press the wrong one; the demo tasks do not collide.
+- **Evidence size:** the outline stored in `evidence.json` is cut at 20000 characters. The fingerprint is still computed from the whole page, so a change far down the page is not missed.
+- **Accepted limits, on purpose:** a clock or counter on the page can only make "nothing happened" fire *less* often, never falsely. A clickable box with no role (a bare `div`) is not seen by the outline; that is a known limit of V1. Every safety check uses up one step of the budget, including refused or invalid steps, so a model that keeps choosing bad targets runs out of steps.
+- **Answer key:** for S2 (a completed task cannot be reopened) the expected signal is now "state not reached": the box was asked to become unticked and is still ticked. It is not "nothing happened", because a request did go out.

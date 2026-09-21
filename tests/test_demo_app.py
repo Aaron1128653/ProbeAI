@@ -269,10 +269,11 @@ def test_reset_restores_seeds_and_clears_trigger_log(server, page):
 def test_ground_truth_file_is_well_formed():
     truth = json.loads((ROOT / "demo_app" / "ground_truth.json").read_text(encoding="utf-8"))
     assert [item["id"] for item in truth] == ["S1", "S2", "S3", "S4", "S5", "S6"]
+    assert {item["id"]: item["expected_signal"] for item in truth}["S2"] == "state_not_reached"
     for item in truth:
         assert item["kind"] in ("bug", "improvement")
         assert item["expected_signal"] in (
-            "http_5xx", "http_4xx", "no_effect", "overflow", "judge_only")
+            "http_5xx", "http_4xx", "no_effect", "state_not_reached", "overflow", "judge_only")
         words = item["signature_any"]
         assert 8 <= len(words) <= 12
         assert all(w == w.lower() for w in words)
