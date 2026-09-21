@@ -10,5 +10,12 @@ What was actually fetched and read (not just seen in search results):
 | [WebProber, arXiv 2509.05197](https://arxiv.org/html/2509.05197v1) | LLM/vision web-testing prototype on 120 sites: 29 usability issues found, ~85% of reported bugs were false positives (mostly browser-automation artefacts), 59.4% coverage on a manually inspected subset; shallow exploration and dynamic content are weak points. | Best available argument that unverified LLM bug reports are noise. Cite it for "why verify before reporting". |
 | [Stagehand Python SDK](https://pypi.org/project/stagehand/) | Python >= 3.11, local mode works without Node or Browserbase; v4.1.0 released 2026-09-09, dev builds of 4.2.0 as of 2026-09-19. | It is usable from Python, but the API is moving fast. See D2. |
 
-Not verified: the Reddit / r/softwaretesting claims in the ChatGPT write-up. Reddit is blocked for this tool, so treat those as anecdotes.
+Market check (homepages fetched 2026-09-21):
+
+| Source | What it says | Note |
+|---|---|---|
+| [QA.tech](https://www.qa.tech) | "AI QA Testing Tool for Web & Mobile - Autonomous QA Agents". Tests without touching your code, plain-language goals, screenshots + logs + network activity for every step, agent reasoning at the point of failure. | Closest to our brief. The page does not say whether findings are independently reproduced; do not claim they are not. |
+| [Momentic](https://momentic.ai) | "Catch real bugs before they ship." Plain-English end-to-end tests, hosted browsers/devices, auto-update on UI change, repro steps and session replays. Tests are specified (YAML) and it learns from docs, code and Jira; it is not just "paste a URL". | The ChatGPT write-up quoted a different headline ("Point Mo at your app...") that I could not find; treat its "Momentic is almost this exact task" claim as unverified. |
+
+Not verified: funding claims (Momentic Series A etc.), and: the Reddit / r/softwaretesting claims in the ChatGPT write-up. Reddit is blocked for this tool, so treat those as anecdotes.
 Seen in search results only (not read): Midscene, Browser Use, Bug0 roundups.

@@ -9,7 +9,7 @@ Evidence and sources: `docs/RESEARCH.md`.
 
 **Decision.** ProbeAI takes a running URL (declared staging) and runs this pipeline:
 `understand app -> missions -> execute (atomic steps) -> oracles collect evidence -> judge -> verify -> report`.
-- *Understand*: one LLM call turns the first page state into an **App Model** (app type, core user capabilities) and 3-5 **test missions** (goal, risk, priority, category). Missions are user goals, never selectors or scripts.
+- *Understand*: one LLM call turns the first page state into an **App Model** (app type, core user capabilities) and 3-5 **test missions** (goal, risk, priority, category, and a one-sentence `why` explaining why this is worth testing). Missions are user goals, never selectors or scripts.
 - *Execute*: per step the LLM sees a text state of the page and picks one atomic action by **element index**. Before acting it must state what it **expects** to change (pre-registered hypothesis). Budgets: 5 missions, 6 steps per mission, 15 steps and 180 s per run.
 - *Oracles* (deterministic, no LLM): console error, uncaught page error, failed request, same-origin HTTP >= 400, "no observable effect" after an action (URL and visible text unchanged, no request), horizontal overflow.
 - *Judge*: LLM gets mission + expected vs observed + oracle signals and proposes candidate findings, kind = bug or improvement. It interprets evidence, it does not create evidence.
@@ -73,11 +73,15 @@ Each report item: title, tier, severity, impact, numbered steps, expected vs obs
 ## D4 - Demo target and evaluation protocol  (2026-09-21)
 
 **Decision.**
-- Demo app "TaskBoard": vanilla JS + tiny Python server. Six seeded issues: S1 delete returns HTTP 500 on the server side; S2 completed task cannot be reopened; S3 whitespace-only task accepted; S4 very long title overflows the layout; S5 failed save shows no message; S6 filter counter wrong. Query flag `?bugs=off` gives a clean build. A server-side **trigger log** records which seeded path actually ran (ground truth), and `/__reset` restores state.
+- Demo app "TaskBoard": vanilla JS + tiny Python server. Six seeded issues (as built in T1): S1 delete always returns HTTP 500 and the task stays; S2 completed task cannot be reopened; S3 whitespace-only title accepted; S4 very long title overflows the layout; S5 duplicate title gets HTTP 409 and the UI shows nothing; S6 footer "items left" shows the total instead of the active count. Signals: S1 http_5xx, S2 no_effect, S3 judge_only, S4 overflow, S5 http_4xx, S6 judge_only, so three hard signals, one weak, two judge-only. Query flag `?bugs=off` gives a clean build. A server-side **trigger log** records which seeded path actually ran (ground truth), and `/__reset` restores state.
 - One third-party demo site (e.g. a public TodoMVC) for generality; no ground truth, judged by reading.
 - Protocol: N=5 runs on buggy, N=5 on clean. Per seeded bug report **exercised** (trigger log) versus **confirmed** (report). On clean, count every Confirmed/Likely item as a false positive. Also log tokens, cost estimate and wall time per run. Report counts and ranges only; call it a "small validation experiment", not a benchmark.
 
-**Rejected.** 20 seeded bugs (unmanageable); scoring only on the buggy app (cannot measure false positives); an LLM to match findings to seeded bugs (matching by declared signature in `ground_truth.json`, ambiguous cases adjudicated by hand once and written down).
+**Trigger rule (amended after T1).** A trigger is logged only when the faulty behaviour actually *manifests* (S4: only when the page really overflows, not merely when a title is long), so "exercised" always means "the bug was really on screen".
+**Matching rule.** `ground_truth.json` holds `signature_any` (generous synonym list per issue). A finding matches a seeded bug if it hits any keyword; that is only a first pass. Reported numbers use a hand-labelled adjudication file per run (about 25 findings in total, feasible), written down in `runs/<id>/adjudication.json`.
+**Harness carve-out.** Requests to paths starting with `/__` are demo plumbing (trigger log, reset). The harness ignores them in evidence and oracles, configurable via `ignore_paths`.
+
+**Rejected.** 20 seeded bugs (unmanageable); scoring only on the buggy app (cannot measure false positives); an LLM to match findings to seeded bugs.
 
 **Consequences.** Separates "never tried it" (coverage) from "tried it, did not recognise it" (judgement), which is the honest way to describe a miss.
 
@@ -98,9 +102,20 @@ Each report item: title, tier, severity, impact, numbered steps, expected vs obs
 
 ---
 
+## D6 - Positioning and the "why not just buy a tool?" answer  (2026-09-21)
+
+**Decision.** Position ProbeAI as a **pre-release check for small teams with no QA**: give it a staging URL, get a few-minute smart smoke test and a short list of what deserves a human look. Not a replacement for QA, not a permanent test suite. The report opens with a **Release Check** summary (counts per tier plus "review before release" or "no confirmed issues") and shows "reproduced n/n" on each item.
+We do **not** claim novelty. Commercial products exist in this category (e.g. QA.tech: autonomous agents, no source code, screenshots/logs/network per step; Momentic: AI end-to-end tests with repro steps and replays; see `docs/RESEARCH.md`). The prototype's job is to show the mechanism and, specifically, where trust comes from.
+
+**Rejected.** Pitching it as a startup idea (no moat against funded competitors and irrelevant to a two-week assessment); adding features that do not raise coverage, trust or report usefulness (the three-question filter for every feature).
+
+**Q&A - "why not use QA.tech / Momentic?"** "You often should. For a client I would evaluate them. Building a small one showed me what to ask them: how do they decide what to test, how do they avoid false alarms, and where does the client's data go. My prototype answers those questions in the open."
+
+---
+
 ## Tasks for /build (ordered; none needs an API key)
 
-- **T1 Demo app "TaskBoard"** with S1-S6, `?bugs=off`, `/__trigger_log`, `/__reset`, `ground_truth.json`. *Accept*: `pytest` starts the server and a hand-written Playwright check (test code only, not the product) shows each S-bug triggers in buggy mode and none in clean mode.
+- **T1 Demo app "TaskBoard"** - DONE, commit `1eabe27`, 15 tests pass. Follow-ups (fold into T2): S4 logs only when overflow manifests; `ground_truth.json` uses `signature_any` synonym lists.
 - **T2 Harness**: page-state extractor with numbered elements, step executor by index that records a semantic locator, evidence recorder (console, pageerror, requestfailed, >=400 responses, before/after screenshot, URL, text hash), safety policy (same origin, step budget, blocked patterns). *Accept*: a scripted step list (no LLM) against TaskBoard writes an evidence JSON that shows the S1 `DELETE ... 500`.
 - **T3 Oracles + replay verifier**: turn evidence into signals, replay recorded steps in a fresh context, compute tiers. *Accept*: scripted run yields S1 = Confirmed, S3 = Likely/Improvement, clean mode = zero Confirmed.
 - **T4 LLM client with fake/replay mode**, structured schemas (AppModel, Mission, Step, Finding), token and cost log. *Accept*: full pipeline runs end to end against TaskBoard using recorded fake responses.
