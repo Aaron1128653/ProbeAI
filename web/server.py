@@ -151,7 +151,13 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
         # module docstring for why it cannot be a single browser shared from the async lifespan).
         result = run_test(url, run_profile(), llm, out_dir, on_event=on_event, reset_path=reset_path)
     except Exception as exc:
-        message = str(exc) or type(exc).__name__
+        # Playwright's own exceptions are multi-line (the real error, then a blank line, then a
+        # verbose "Call log:" retry trace) - found by actually watching a failed run (T6-c): the
+        # full text is exactly the kind of thing that looks alarming to a non-engineer for no
+        # reason. The first line already says what went wrong (e.g. "Page.goto:
+        # net::ERR_CONNECTION_REFUSED at http://..."); the rest stays in server logs, not the page.
+        raw = str(exc).strip() or type(exc).__name__  # guaranteed non-empty either way
+        message = raw.splitlines()[0]
         q.put({"type": "error", "t": round(time.monotonic() - start, 3), "run_status": "failed",
               "message": message, "kind": type(exc).__name__})
         with STATE.lock:

@@ -147,6 +147,19 @@ def test_a_raised_exception_produces_one_error_event_with_run_status_failed(monk
     assert seen[-1]["kind"] == "LLMError"
 
 
+def test_a_multiline_exception_only_shows_its_first_line_to_the_page(monkeypatch):
+    """Playwright's own errors are multi-line: the real reason, then a blank line, then a verbose
+    'Call log:' retry trace - found by actually watching a failed run (T6-c). The page is not the
+    place for that trace; only the first line (the actual reason) should reach it."""
+    events = [{"type": "run_started", "t": 0.0, "url": "http://x/", "profile": "live"}]
+    error = RuntimeError("Page.goto: net::ERR_CONNECTION_REFUSED at http://x/\nCall log:\n - navigating to \"http://x/\"")
+    monkeypatch.setattr(server, "run_test", fake_run_test(events, error=error))
+    with TestClient(server.app) as client:
+        _, seen = start_and_drain(client)
+    assert seen[-1]["message"] == "Page.goto: net::ERR_CONNECTION_REFUSED at http://x/"
+    assert "Call log" not in seen[-1]["message"]
+
+
 def test_status_remembers_the_last_run_after_it_finishes(monkeypatch):
     events = [{"type": "run_finished", "t": 1.0, "report": {"counts": {}, "timed_out": False}}]
     finding = {"id": "C1", "tier": "Confirmed", "title": "Delete fails"}
