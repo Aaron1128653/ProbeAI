@@ -10,6 +10,7 @@ No real API call anywhere: every LLMClient here is mode="fake". Two kinds of tes
     same steps script T3b already proved the oracles on.
 """
 import json
+import os
 import socket
 import time
 from dataclasses import replace
@@ -18,13 +19,14 @@ from pathlib import Path
 import pytest
 
 from conftest import fresh_app, http, load_steps, make_entry, make_run, make_state
-from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, LIKELY, Meter, Profile, build_mission_items,
-                         build_report, check_spend_confirmed, decide, diff_lines, disprove_prompt,
-                         judge_prompt, plan_prompt, replay_mission, run_mission, run_test, step_prompt)
+from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, LIKELY, Meter, Profile,
+                         build_mission_items, build_report, check_spend_confirmed, decide,
+                         diff_lines, disprove_prompt, judge_prompt, main, plan_prompt,
+                         replay_mission, run_mission, run_test, sanitize_judgement, step_prompt)
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS
 from probe.executor import Run, run_steps
-from probe.findings import Candidate
+from probe.findings import Candidate, classify
 from probe.llm import DEFAULT_MAX_COST_USD, LLMClient
 from probe.oracles import Signal, signals_for_run
 from probe.schemas import (AppPlan, Disproof, JudgedFinding, Judgement, Mission, StepDecision,
@@ -505,3 +507,163 @@ def test_run_test_marks_timed_out_when_the_wall_clock_is_already_spent(server, b
     result = run_test(server, instant, llm, tmp_path / "out", reset_path="/__reset", browser=browser)
     assert result.timed_out is True and result.report["timed_out"] is True
     assert result.missions == []  # the deadline was already gone before the first mission started
+
+
+# ================================================================================================
+# Fixes from the 2026-09-22 /review (Opus). Each test below is written to fail against the
+# pre-fix code, matching the review's own reproduction, so these are regression tests, not just
+# feature tests.
+# ================================================================================================
+
+# ---- Fix 1: main() used to read PROBE_LLM_MODE before .env was loaded, silently skipping the
+# --yes-spend gate whenever the mode came from .env rather than the shell (the documented way to
+# configure it). Verified in the review by an isolated subprocess; here as a proper regression test.
+
+def test_main_reads_dotenv_before_the_yes_spend_gate(tmp_path, monkeypatch, capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("PROBE_LLM_MODE=real\nPROBE_MAX_COST_USD=0.10\n", encoding="utf-8")
+    monkeypatch.setattr("probe.agent.ENV_FILE", env_file)
+    monkeypatch.delenv("PROBE_LLM_MODE", raising=False)
+    monkeypatch.delenv("PROBE_MAX_COST_USD", raising=False)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            main(["--url", "http://example.invalid/", "--profile", "live", "--out", str(tmp_path / "out")])
+        # Before the fix this was None (the gate never saw "real"), so it fell through and tried a
+        # real API call instead of exiting 2 here.
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "--yes-spend" in err and "0.10" in err  # the cap is stated before spending, per D9 item 4
+    finally:
+        os.environ.pop("PROBE_LLM_MODE", None)  # load_dotenv writes os.environ directly: clean up
+        os.environ.pop("PROBE_MAX_COST_USD", None)
+
+
+def test_main_with_yes_spend_passes_the_gate_and_still_needs_a_real_key(tmp_path, monkeypatch, capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("PROBE_LLM_MODE=real\n", encoding="utf-8")
+    monkeypatch.setattr("probe.agent.ENV_FILE", env_file)
+    monkeypatch.delenv("PROBE_LLM_MODE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    try:
+        with pytest.raises(SystemExit) as exc:
+            main(["--url", "http://example.invalid/", "--profile", "live",
+                 "--out", str(tmp_path / "out"), "--yes-spend"])
+        assert exc.value.code == 1  # past the gate, but LLMClient itself still refuses: no key
+        assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+    finally:
+        os.environ.pop("PROBE_LLM_MODE", None)
+
+
+# ---- Fix 2: a judge finding citing a step outside the mission's real range used to crash
+# (IndexError, step too large) or silently misattribute evidence (step<=0, Python's negative
+# indexing) once it reached judge_only_candidate's mission_run.results[step-1]. Reproduced in the
+# review directly against replay_mission; sanitize_judgement now runs before that.
+
+def test_sanitize_judgement_drops_out_of_range_steps_and_keeps_valid_ones():
+    j = judgement(
+        step_verdicts=[StepVerdict(step=1, violated=True, reason="r"),
+                      StepVerdict(step=99, violated=True, reason="out of range too")],
+        findings=[bug(1, title="valid"), bug(0, title="zero"), bug(5, title="too far"),
+                 improvement(1, title="also valid")])
+    clean, dropped = sanitize_judgement(j, valid_steps=2, mission=MISSION)
+    assert [f.title for f in clean.findings] == ["valid", "also valid"]
+    assert [v.step for v in clean.step_verdicts] == [1]
+    assert {d["step"] for d in dropped} == {0, 5}
+    assert all(d["tier"] == DROPPED and d["mission"] == MISSION.id for d in dropped)
+    assert {d["title"] for d in dropped} == {"zero", "too far"}  # the judge's text is kept, for the record
+
+
+def test_sanitize_judgement_keeps_findings_with_no_step():
+    j = judgement(findings=[JudgedFinding(step=None, kind="improvement", title="general", severity="low",
+                                          impact="i", expected="e", observed="o", suggestion="s")])
+    clean, dropped = sanitize_judgement(j, valid_steps=3, mission=MISSION)
+    assert len(clean.findings) == 1 and dropped == []
+
+
+def test_replay_mission_no_longer_crashes_on_a_hallucinated_step(tmp_path):
+    from conftest import make_evidence, make_record
+    pairs = [(make_record(action="click", name="Add"), make_evidence(step=1)),
+            (make_record(action="click", name="Add"), make_evidence(step=2))]
+    run = make_run(pairs)  # only 2 steps were actually taken
+    raw = judgement(findings=[bug(5, title="hallucinated step")])  # the judge miscounted
+
+    clean, dropped = sanitize_judgement(raw, valid_steps=len(run.results), mission=MISSION)
+    assert dropped and dropped[0]["step"] == 5
+
+    candidates, results = replay_mission(None, "http://x/", None, run, [], clean, replays=0,
+                                         out_dir=tmp_path, ignore_paths=("/__",))
+    assert candidates == []  # no crash, and nothing invented in place of the dropped finding
+
+
+def test_run_test_wires_sanitize_judgement_in_end_to_end(server, browser, tmp_path):
+    """Not just that sanitize_judgement works standalone: that run_test() actually calls it before
+    handing the judgement to replay_mission. Without that wiring this crashes with an IndexError
+    (confirmed by temporarily removing the call while writing this fix) instead of finishing with
+    a Dropped item for the hallucinated step."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    script = {
+        "plan": [_plan_with(MISSION).model_dump()],
+        "step": [decision("click", ref, expect="the task disappears").model_dump(),
+                decision("done", None, expect="").model_dump()],
+        # The mission only takes 1 real step, but the judge cites step 7 - hallucinated/miscounted.
+        "judge": [judgement(findings=[bug(7, title="hallucinated"), bug(1, title="Delete fails")]).model_dump()],
+        "disprove": [],  # step 1's http_5xx is a hard signal: no disprove call is made
+    }
+    llm = LLMClient(tmp_path, mode="fake", source=script, env_file=None)
+    result = run_test(server, "live", llm, tmp_path / "out", reset_path="/__reset", browser=browser)
+
+    by_title = {f["title"]: f["tier"] for f in result.findings}
+    assert by_title["Delete fails"] == CONFIRMED
+    assert by_title["hallucinated"] == DROPPED
+    dropped = next(f for f in result.findings if f["title"] == "hallucinated")
+    assert "outside this mission's actual range" in dropped["reason"]
+
+
+# ---- Fix 3: judging, replay and the disprove pass used to run with no deadline check at all, so
+# a mission that used up the wall clock taking actions could still add a full replay and several
+# disprove calls afterward. Skipping them now can only leave a candidate at Likely, never wrongly
+# promote it to Confirmed (the existing tier rule already treats replays=0 / no disprove
+# conservatively) - these tests confirm the skip actually happens, not just that it would be safe.
+
+def test_replay_mission_skips_replay_once_the_deadline_has_passed(server, browser, tmp_path):
+    fresh_app(server)
+    context = new_context(browser)
+    mission_run = run_steps(context.new_page(), server, load_steps("steps_delete.json"),
+                            tmp_path / "run", DEFAULT_IGNORE_PATHS)
+    context.close()
+    signals = signals_for_run(mission_run, server)
+    assert signals  # the delete bug does raise a hard signal
+
+    candidates, results = replay_mission(browser, server, "/__reset", mission_run, signals, None,
+                                         replays=2, out_dir=tmp_path / "v", ignore_paths=DEFAULT_IGNORE_PATHS,
+                                         deadline=time.monotonic() - 1)
+    assert results == []  # no replay was attempted
+    assert candidates and candidates[0].replays == 0
+    assert classify(candidates[0]) != CONFIRMED  # unreplayed, so it cannot be Confirmed
+
+
+def test_build_mission_items_skips_disprove_once_the_deadline_has_passed(tmp_path):
+    client = fake_client(tmp_path, {})  # disprove has no scripted answer: calling it would raise
+    c = candidate(signal("overflow", 2))  # fully reproduced contextual signal: would normally trigger disprove
+    items = build_mission_items(MISSION, make_run([]), [c], judgement(), client, Meter(),
+                                deadline=time.monotonic() - 1)
+    assert items[0]["tier"] == LIKELY  # no disprove call was made, so it stays short of Confirmed
+
+
+def test_run_test_still_produces_a_report_when_time_runs_out_during_verification(server, browser, tmp_path):
+    """A mission that finishes its actions with no time left must still report what it found,
+    not skip judging/replay/disprove silently or crash - it should just report less confidently."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    tight = Profile("tight", max_missions=1, max_total_steps=10, max_steps_per_mission=6,
+                    wall_clock_s=0.01, replays=2)
+    script = {
+        "plan": [_plan_with(MISSION).model_dump()],
+        "step": [decision("click", ref, expect="the task disappears").model_dump(),
+                decision("done", None, expect="").model_dump()],
+    }
+    llm = LLMClient(tmp_path, mode="fake", source=script, env_file=None)
+    result = run_test(server, tight, llm, tmp_path / "out", reset_path="/__reset", browser=browser)
+    assert result.timed_out is True
+    assert (tmp_path / "out" / "report.json").exists()  # a report is still written, not lost

@@ -34,7 +34,7 @@ from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder
 from probe.executor import Run, Step, StepResult, execute_step
 from probe.findings import (CONFIRMED, DROPPED, LIKELY, build_candidates, candidate_dict,
                             describe_step, judge_only_candidate)
-from probe.llm import DEFAULT_MAX_COST_USD, LLMClient, LLMError, validate_decision
+from probe.llm import ENV_FILE, DEFAULT_MAX_COST_USD, LLMClient, LLMError, load_dotenv, validate_decision
 from probe.oracles import detect_signals
 from probe.prompts import SYSTEM
 from probe.run_script import evidence_dict
@@ -232,9 +232,17 @@ def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: i
 # ---- judging and verifying one mission ------------------------------------------------------
 
 def replay_mission(browser, base_url: str, reset_path, mission_run: Run, signals, judgement,
-                   replays: int, out_dir, ignore_paths=DEFAULT_IGNORE_PATHS):
+                   replays: int, out_dir, ignore_paths=DEFAULT_IGNORE_PATHS, deadline: float | None = None):
     """Build the step-level candidates (D7/D8), plus one judge-only candidate per bug finding
-    that cited a step with no browser signal. Replays cover every step either kind needs."""
+    that cited a step with no browser signal. Replays cover every step either kind needs.
+
+    `judgement` must already be sanitized (see `sanitize_judgement`): every finding.step here is
+    trusted to be a valid index into mission_run.results, because `judge_only_candidate` uses it
+    to index directly. `deadline`, if given and already passed, skips the replay call entirely
+    (candidates then keep replays=0, which the existing tier rule already treats conservatively:
+    nothing can reach Confirmed without a replay, so skipping only ever costs confidence, never
+    correctness) - this is what keeps the verification phase from running unbounded past the
+    profile's wall clock (review finding: it previously had no deadline check at all)."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)  # build_candidates writes audit.json here even
                                                 # on a quiet mission, when no replay creates it first
@@ -245,7 +253,7 @@ def replay_mission(browser, base_url: str, reset_path, mission_run: Run, signals
     replay_upto = max(signal_steps + judge_only_steps, default=0)
 
     results = []
-    if replay_upto:
+    if replay_upto and (deadline is None or time.monotonic() < deadline):
         recorded = steps_from_records([r.record for r in mission_run.results])[:replay_upto]
         results = replay(browser, base_url, recorded, reset_path, replays, out_dir / "replays", ignore_paths)
 
@@ -255,7 +263,40 @@ def replay_mission(browser, base_url: str, reset_path, mission_run: Run, signals
     return candidates, results
 
 
-def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, meter: Meter) -> list[dict]:
+def sanitize_judgement(judgement: Judgement, valid_steps: int, mission) -> tuple[Judgement, list[dict]]:
+    """Drop any finding or verdict citing a step outside 1..valid_steps before it can reach
+    `replay_mission` / `build_mission_items`, which trust `finding.step` to index the mission's
+    own results list directly. A cheap model miscounting or hallucinating a step number is an
+    ordinary failure mode, not an edge case (review finding): unfiltered, a too-large step raises
+    an IndexError that loses the whole run's output, and step<=0 silently misattributes the LAST
+    step's evidence via Python's negative indexing. Returns (clean_judgement, dropped_items) -
+    dropped items are already shaped as Dropped report entries, so nothing vanishes without a
+    trace; they still carry the judge's title/text for whoever reads audit.json."""
+    def in_range(step: int | None) -> bool:
+        return step is None or 1 <= step <= valid_steps
+
+    dropped: list[dict] = []
+    kept_findings = []
+    for f in judgement.findings:
+        if in_range(f.step):
+            kept_findings.append(f)
+        else:
+            dropped.append({
+                "id": f"X-{mission.id}-{f.step}", "tier": DROPPED,
+                "reason": f"the judge cited step {f.step}, which is outside this mission's actual "
+                         f"range of 1-{valid_steps} steps taken; the finding was not used",
+                "mission": mission.id, "step": f.step, "reproduced": "-", "signals": [],
+                "steps_to_reproduce": [], "screenshot_before": None, "screenshot_after": None,
+                "title": f.title, "severity": f.severity, "impact": f.impact,
+                "expected": f.expected, "observed": f.observed, "suggestion": f.suggestion,
+            })
+    kept_verdicts = [v for v in judgement.step_verdicts if in_range(v.step)]
+    clean = judgement.model_copy(update={"findings": kept_findings, "step_verdicts": kept_verdicts})
+    return clean, dropped
+
+
+def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, meter: Meter,
+                        deadline: float | None = None) -> list[dict]:
     """Turn candidates plus the judge's verdicts and text into report items.
 
     A finding's `kind` decides its fate, not just whether it exists: kind "improvement" always
@@ -263,7 +304,12 @@ def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, m
     when the browser did raise a signal at that step (an oracle cannot tell "acceptable behaviour
     with a rough edge" from "a defect" - only the judge can, and it already did). kind "bug" goes
     through the normal Confirmed/Likely/Dropped rule (D7 point 3, D8 rulings), with judge text
-    attached, or a title built from the signal when the judge did not single that step out."""
+    attached, or a title built from the signal when the judge did not single that step out.
+
+    `judgement` must already be sanitized (see `sanitize_judgement`). `deadline`, if given and
+    already passed, skips any remaining disprove calls: a candidate left without one just stays at
+    its pre-disprove tier (Likely, never wrongly Confirmed), so this only costs confidence, never
+    correctness (review finding: this loop previously had no deadline check at all)."""
     verdict_by_step = {v.step: v.violated for v in (judgement.step_verdicts if judgement else [])}
     finding_by_step: dict[int, object] = {}
     for f in (judgement.findings if judgement else []):
@@ -279,6 +325,8 @@ def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, m
             continue  # judge-only candidates and hard signals never need the disprove pass
         if verdict_by_step.get(c.step) is False:
             continue  # the judge already says this did not happen; asking again adds nothing
+        if deadline is not None and time.monotonic() >= deadline:
+            continue  # out of time: leave it at Likely rather than spend more verifying it
         if c.replays and all(s.reproduced_n == c.replays for s in c.signals):
             answer, usage = llm.call("disprove", SYSTEM["disprove"], disprove_prompt(mission, c), Disproof)
             meter.record(usage)
@@ -431,14 +479,26 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
         timed_out = timed_out or status == "timed_out"
         all_evidence[mission.id] = evidence_dict(mission_run)
 
+        # Review finding: judging, replay and disprove used to run with no deadline check at all,
+        # so a mission that used up the wall clock taking actions could still add a full
+        # replay + several disprove calls afterward. Past the deadline we stop generating new
+        # evidence and report on what was already recorded; replay_mission/build_mission_items
+        # degrade safely on their own (no replay or no disprove call can only leave a candidate at
+        # Likely, never wrongly promote it to Confirmed).
+        verification_time_up = time.monotonic() >= deadline
+        timed_out = timed_out or verification_time_up
+
         judgement = None
-        if mission_run.results:  # nothing to judge if the mission took no steps at all
+        if mission_run.results and not verification_time_up:  # nothing to judge if no steps were taken
             judgement, usage = llm.call("judge", SYSTEM["judge"], judge_prompt(mission, mission_run, signals), Judgement)
             meter.record(usage)
+            judgement, dropped = sanitize_judgement(judgement, len(mission_run.results), mission)
+            all_findings += dropped
 
         candidates, _replays = replay_mission(browser, base_url, reset_path, mission_run, signals,
-                                              judgement, profile.replays, mission_out, ignore_paths)
-        items = build_mission_items(mission, mission_run, candidates, judgement, llm, meter)
+                                              judgement, profile.replays, mission_out, ignore_paths,
+                                              deadline=deadline)
+        items = build_mission_items(mission, mission_run, candidates, judgement, llm, meter, deadline=deadline)
         all_findings += items
         mission_summaries.append({"id": mission.id, "goal": mission.goal, "status": status,
                                   "steps": len(mission_run.results)})
@@ -486,6 +546,14 @@ def main(argv=None):
                         help="required when PROBE_LLM_MODE is real or record, since those spend money")
     args = parser.parse_args(argv)
 
+    # Load .env BEFORE reading PROBE_LLM_MODE for the spend gate below. Review finding: if this
+    # were read first (as it used to be), a mode set only in .env - the way .env.example and the
+    # setup docs tell you to configure it - would show as unset here, the gate would see None and
+    # wave the run through, and LLMClient's OWN later load_dotenv() would then put it in real mode
+    # anyway. That silently skipped --yes-spend and the printed cap. Loading here first means the
+    # gate sees exactly the mode that will actually run. LLMClient's own load_dotenv() call is then
+    # a no-op for anything already set (see its docstring), so this is safe to call twice.
+    load_dotenv(ENV_FILE)
     mode = os.environ.get("PROBE_LLM_MODE")
     message = check_spend_confirmed(mode, args.yes_spend)
     if message:
