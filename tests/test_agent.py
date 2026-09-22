@@ -27,7 +27,7 @@ from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS
 from probe.executor import Run, run_steps
 from probe.findings import Candidate, classify
-from probe.llm import DEFAULT_MAX_COST_USD, LLMClient
+from probe.llm import DEFAULT_MAX_COST_USD, LLMClient, LLMError
 from probe.oracles import Signal, signals_for_run
 from probe.schemas import (AppPlan, Disproof, JudgedFinding, Judgement, Mission, StepDecision,
                            StepVerdict)
@@ -538,18 +538,28 @@ def test_main_reads_dotenv_before_the_yes_spend_gate(tmp_path, monkeypatch, caps
         os.environ.pop("PROBE_MAX_COST_USD", None)
 
 
-def test_main_with_yes_spend_passes_the_gate_and_still_needs_a_real_key(tmp_path, monkeypatch, capsys):
+def test_main_with_yes_spend_passes_the_gate_and_reaches_llmclient(tmp_path, monkeypatch, capsys):
+    """Once --yes-spend is given, main() proceeds past the gate to build the real client. Checked
+    by stubbing LLMClient itself to raise unconditionally, rather than relying on ANTHROPIC_API_KEY
+    being absent: this machine may have a real .env with a real key (it does, once funded), and
+    this test must give the same answer either way, not depend on what happens to be on disk."""
     env_file = tmp_path / ".env"
     env_file.write_text("PROBE_LLM_MODE=real\n", encoding="utf-8")
     monkeypatch.setattr("probe.agent.ENV_FILE", env_file)
     monkeypatch.delenv("PROBE_LLM_MODE", raising=False)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    def boom(*args, **kwargs):
+        raise LLMError("stub reached: the gate did not block this call")
+    monkeypatch.setattr("probe.agent.LLMClient", boom)
+
     try:
         with pytest.raises(SystemExit) as exc:
             main(["--url", "http://example.invalid/", "--profile", "live",
                  "--out", str(tmp_path / "out"), "--yes-spend"])
-        assert exc.value.code == 1  # past the gate, but LLMClient itself still refuses: no key
-        assert "ANTHROPIC_API_KEY" in capsys.readouterr().err
+        assert exc.value.code == 1  # past the gate, but something still went wrong (here: our stub)
+        out, err = capsys.readouterr()
+        assert "Spending real API money" in out  # the gate really was passed, not skipped
+        assert "stub reached" in err
     finally:
         os.environ.pop("PROBE_LLM_MODE", None)
 
