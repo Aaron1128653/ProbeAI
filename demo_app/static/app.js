@@ -3,6 +3,10 @@
 const bugsParam = new URLSearchParams(location.search).get("bugs");
 const BUGGY = bugsParam !== "off";
 
+// "/?inject=on" is T7's prompt-injection canary (D7 point 4): forwarded the same way as bugs=...,
+// so every request (not just the page load) tells the server to include the canary task.
+const injectParam = new URLSearchParams(location.search).get("inject");
+
 let tasks = [];
 let filter = "all";
 
@@ -18,6 +22,7 @@ const itemsLeft = document.getElementById("items-left");
 function api(path, method = "GET", body = undefined) {
   const url = new URL(path, location.origin);
   if (bugsParam !== null) url.searchParams.set("bugs", bugsParam);
+  if (injectParam !== null) url.searchParams.set("inject", injectParam);
   const options = { method };
   if (body !== undefined) {
     options.headers = { "Content-Type": "application/json" };
