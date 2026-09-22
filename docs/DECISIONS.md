@@ -201,6 +201,11 @@ Enforcement in layers:
 
 ---
 
+**D9 addendum - after building T5 (2026-09-22).**
+- **A judge finding's `kind` overrides tiering, even at a step with a browser signal.** `kind="improvement"` always becomes tier Improvement (the judge's text, the candidate's evidence, no disprove pass, no Confirmed/Likely/Dropped) - an oracle cannot tell "acceptable behaviour with a rough edge" from "a defect" at the same HTTP status; only the judge can, and a `bug`/`improvement` label is exactly that call. `kind="bug"` is the only path into the normal tier rule.
+- **This corrects the T5 acceptance wording.** "Confirmed S1, Likely S2/S4/S5" described what T3b produced *before* the disprove pass existed. With the disprove pass built (this task), a fully-reproduced contextual signal cannot stay "Likely": `classify_with_reason` sends it to Confirmed (disprove survives) or Dropped (disprove refutes or the judge says not violated) - "Likely" only remains for a signal that is not fully reproduced, or for a judge-only finding. So once disprove exists, resolving S2 and S4 (real bugs, D4/T1's `kind="bug"`) to Confirmed is the disprove pass doing its job, not a bug in the pipeline. S5's `kind` in `ground_truth.json` is `"improvement"` ("no message shown" is a UX gap, not the 409 itself), so it was never a Likely/Confirmed candidate to begin with - it is the improvement-override case above.
+- **Corrected target for the T5 acceptance test**, replacing the D9 wording, against `examples/steps_taskboard_all.json`: Confirmed = {S1 (hard), S2, S4 (contextual, disprove survives)}; Likely = {S6 (judge-only bug, outcome reproduces)}; Improvement = {S3 (judge-only), S5 (signal-based, judge overrides)}; Dropped = {}.
+
 ## Tasks for /build (ordered; none needs an API key)
 
 - **T3 oracles, verifier, tiers** - DONE, `b3969c4`, 90 tests pass (independently re-run).
