@@ -1,15 +1,23 @@
-"""The LLM client (D8 "LLM client"): one entry point, four modes, a usage log and a cost cap.
+"""The LLM client (D8 "LLM client", budget guard added in D9/T5-0): one entry point, four modes,
+a usage log, a per-run cost cap and a cumulative spend ledger.
 
     client = LLMClient(run_dir)
     answer, usage = client.call("step", SYSTEM["step"], user_text, StepDecision)
 
-Modes, chosen by PROBE_LLM_MODE (default real):
+Modes, chosen by PROBE_LLM_MODE. There is NO default (D9): unset is an error, so spending is
+never silent.
     real     ask the Anthropic API
     record   like real, and also save every prompt and answer to run_dir/llm_record.jsonl
     replay   serve the answers of such a record, by role and call number (the offline fallback)
     fake     serve a hand-written JSON script the same way (for tests)
 Every call is appended to run_dir/llm_log.jsonl. The API key is read from the environment only
 (ANTHROPIC_API_KEY, filled from .env when present) and is never printed or logged.
+
+Two spend caps (D9): PROBE_MAX_COST_USD limits one run (default lowered to 0.30 from the earlier
+1.00); PROBE_TOTAL_BUDGET_USD limits everything added to a shared ledger file across many runs
+(default 8.00, the owner funded 20 and wants to spend at most 10). The ledger is opt-in: pass
+`ledger_path` (the CLI does, at runs/spend_ledger.jsonl) to turn it on; without it only the
+per-run cap applies, so existing callers and tests are unaffected.
 """
 import json
 import os
@@ -25,7 +33,8 @@ from probe.state import PageState
 
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 MODES = ("real", "record", "replay", "fake")
-DEFAULT_MAX_COST_USD = 1.00
+DEFAULT_MAX_COST_USD = 0.30
+DEFAULT_TOTAL_BUDGET_USD = 8.00
 
 # role -> model. Override with PROBE_MODEL_PLAN / _STEP / _JUDGE / _DISPROVE. No date suffixes.
 DEFAULT_MODELS = {
@@ -83,28 +92,42 @@ def _append_line(path: Path, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
+def _read_usd(env_name: str, default: float) -> float:
+    text = os.environ.get(env_name) or str(default)
+    try:
+        return float(text)
+    except ValueError:
+        raise LLMError(f"{env_name} must be a number of US dollars, not {text!r}") from None
+
+
 class LLMClient:
     def __init__(self, run_dir, mode: str | None = None, sdk=None, source=None,
-                 max_cost_usd: float | None = None, env_file=ENV_FILE):
-        """run_dir  the run's folder (llm_log.jsonl and llm_record.jsonl go there)
-        mode     real | record | replay | fake; default PROBE_LLM_MODE, else real
-        sdk      an object with .messages.parse(...); tests inject a stub, otherwise anthropic.Anthropic()
-        source   fake: the script (a dict, or the path of a JSON file {"plan": [...], "step": [...], ...});
-                 replay: the path of an llm_record.jsonl
-        env_file the .env to read first; None reads nothing"""
+                 max_cost_usd: float | None = None, env_file=ENV_FILE,
+                 ledger_path=None, total_budget_usd: float | None = None):
+        """run_dir     the run's folder (llm_log.jsonl and llm_record.jsonl go there)
+        mode        real | record | replay | fake; from PROBE_LLM_MODE if not given.
+                    No default (D9): unset in both places is an error.
+        sdk         an object with .messages.parse(...); tests inject a stub, otherwise anthropic.Anthropic()
+        source      fake: the script (a dict, or the path of a JSON file {"plan": [...], ...});
+                    replay: the path of an llm_record.jsonl. Falls back to PROBE_LLM_SOURCE.
+        env_file    the .env to read first; None reads nothing
+        ledger_path a JSONL file that real/record calls also append their cost to, shared across
+                    runs; before such a call the client sums it and refuses once it would put the
+                    total over total_budget_usd. None (the default) turns this off: only
+                    max_cost_usd (this run alone) is enforced. real/record: falls back to
+                    PROBE_SPEND_LEDGER.
+        total_budget_usd  the cap for ledger_path; default PROBE_TOTAL_BUDGET_USD or 8.00."""
         if env_file:
             load_dotenv(env_file)
-        self.mode = mode or os.environ.get("PROBE_LLM_MODE") or "real"
+        self.mode = mode or os.environ.get("PROBE_LLM_MODE")
+        if not self.mode:
+            raise LLMError("PROBE_LLM_MODE (or the mode argument) is not set. There is no default, "
+                           f"on purpose, so a run never spends money by accident: choose one of "
+                           f"{', '.join(MODES)}.")
         if self.mode not in MODES:
             raise LLMError(f"PROBE_LLM_MODE must be one of {', '.join(MODES)}, not {self.mode!r}")
 
-        if max_cost_usd is None:
-            text = os.environ.get("PROBE_MAX_COST_USD") or str(DEFAULT_MAX_COST_USD)
-            try:
-                max_cost_usd = float(text)
-            except ValueError:
-                raise LLMError(f"PROBE_MAX_COST_USD must be a number of US dollars, not {text!r}") from None
-        self.max_cost_usd = max_cost_usd
+        self.max_cost_usd = max_cost_usd if max_cost_usd is not None else _read_usd("PROBE_MAX_COST_USD", DEFAULT_MAX_COST_USD)
         self.spent_usd = 0.0
 
         self.run_dir = Path(run_dir)
@@ -112,13 +135,18 @@ class LLMClient:
         self.log_path = self.run_dir / "llm_log.jsonl"
         self.record_path = self.run_dir / "llm_record.jsonl"
 
+        ledger_path = ledger_path or os.environ.get("PROBE_SPEND_LEDGER")
+        self.ledger_path = Path(ledger_path) if ledger_path else None
+        self.total_budget_usd = (total_budget_usd if total_budget_usd is not None
+                                 else _read_usd("PROBE_TOTAL_BUDGET_USD", DEFAULT_TOTAL_BUDGET_USD))
+
         self.sdk = None
         self._answers: dict[str, list[dict]] = {}  # fake / replay: role -> answers in order
         self._used: dict[str, int] = {}            # fake / replay: role -> answers served so far
         if self.mode in ("real", "record"):
             self.sdk = sdk or self._make_sdk()
         else:
-            self._answers = self._load_answers(source)
+            self._answers = self._load_answers(source if source is not None else os.environ.get("PROBE_LLM_SOURCE"))
 
     # ---- set-up -----------------------------------------------------------
 
@@ -172,6 +200,27 @@ class LLMClient:
             raise LLMError(f"estimated cost {self.spent_usd:.4f} USD is over PROBE_MAX_COST_USD "
                            f"({self.max_cost_usd:.2f}); the run is aborted")
 
+    def _ledger_total(self) -> float:
+        if not self.ledger_path.is_file():
+            return 0.0
+        total = 0.0
+        for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                total += json.loads(line).get("cost_usd", 0.0)
+        return total
+
+    def _check_ledger(self) -> None:
+        """Only for real/record calls, and only when a ledger_path was given (D9 item 3). Checked
+        BEFORE the call, when the cost of that call is not yet known, so the trigger is >=, not >
+        (unlike _check_cap, which checks AFTER a call and allows landing exactly on the cap)."""
+        if self.ledger_path is None:
+            return
+        total = self._ledger_total()
+        if total >= self.total_budget_usd:
+            raise LLMError(f"the shared spend ledger {self.ledger_path} already totals {total:.4f} USD, "
+                           f"at or over PROBE_TOTAL_BUDGET_USD ({self.total_budget_usd:.2f}); no more "
+                           "real API calls are made. Raise the budget or start a fresh ledger if this is expected.")
+
     def _serve(self, role: str, schema):
         index = self._used.get(role, 0)
         answers = self._answers.get(role, [])
@@ -189,6 +238,7 @@ class LLMClient:
         return parsed, usage
 
     def _ask_api(self, role: str, system: str, user: str, schema):
+        self._check_ledger()
         model = model_for(role)
         price = PRICES.get(model)
         if price is None:
@@ -217,6 +267,8 @@ class LLMClient:
         usage = Usage(role, model, tokens_in, tokens_out, latency_ms, round(cost, 6))
         self.spent_usd += cost
         _append_line(self.log_path, asdict(usage))  # the call was paid for, so it is logged even if unusable
+        if self.ledger_path is not None:
+            _append_line(self.ledger_path, asdict(usage))  # shared across runs; see _check_ledger
 
         parsed = response.parsed_output
         if parsed is None:

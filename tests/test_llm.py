@@ -13,7 +13,8 @@ import anthropic
 import pytest
 
 from conftest import make_entry, make_state
-from probe.llm import DEFAULT_MODELS, LLMClient, LLMError, load_dotenv, validate_decision
+from probe.llm import (DEFAULT_MAX_COST_USD, DEFAULT_MODELS, DEFAULT_TOTAL_BUDGET_USD, MODES,
+                       LLMClient, LLMError, load_dotenv, validate_decision)
 from probe.schemas import (AppPlan, Disproof, JudgedFinding, Judgement, Mission, StepDecision,
                            StepVerdict)
 
@@ -34,7 +35,8 @@ SCHEMA_FOR_ROLE = {"plan": AppPlan, "step": StepDecision, "judge": Judgement, "d
 @pytest.fixture(autouse=True)
 def clean_environment(monkeypatch):
     """Whatever is set on this machine must not change the tests."""
-    for name in ("ANTHROPIC_API_KEY", "PROBE_LLM_MODE", "PROBE_MAX_COST_USD",
+    for name in ("ANTHROPIC_API_KEY", "PROBE_LLM_MODE", "PROBE_MAX_COST_USD", "PROBE_TOTAL_BUDGET_USD",
+                 "PROBE_SPEND_LEDGER", "PROBE_LLM_SOURCE",
                  *(f"PROBE_MODEL_{role.upper()}" for role in DEFAULT_MODELS)):
         monkeypatch.delenv(name, raising=False)
 
@@ -145,9 +147,13 @@ def test_an_unknown_role_or_mode_is_an_error(tmp_path):
         client_for(tmp_path, mode="banana")
 
 
-def test_the_mode_comes_from_probe_llm_mode_and_defaults_to_real(tmp_path, monkeypatch):
-    with pytest.raises(LLMError, match="real mode needs an API key"):  # default: real
+def test_the_mode_has_no_default_and_must_be_set_explicitly(tmp_path, monkeypatch):
+    # D9: no default, so a run never spends money by accident.
+    with pytest.raises(LLMError, match="PROBE_LLM_MODE .* is not set") as error:
         LLMClient(tmp_path, env_file=None)
+    assert "no default" in str(error.value)
+    for name in MODES:
+        assert name in str(error.value)
     monkeypatch.setenv("PROBE_LLM_MODE", "fake")
     assert LLMClient(tmp_path, source={}, env_file=None).mode == "fake"
 
@@ -181,14 +187,83 @@ def test_spending_exactly_the_cap_is_allowed_and_only_more_than_the_cap_aborts(t
         client.call("plan", "s", "u", AppPlan)     # 1.00 of 0.50
 
 
-def test_the_cap_defaults_to_one_dollar_and_can_be_set(tmp_path, monkeypatch):
-    assert client_for(tmp_path, sdk=StubSDK()).max_cost_usd == 1.00
+def test_the_cap_defaults_to_thirty_cents_and_can_be_set(tmp_path, monkeypatch):
+    assert DEFAULT_MAX_COST_USD == 0.30  # D9: lowered from 1.00 so a run cannot spend much by itself
+    assert client_for(tmp_path, sdk=StubSDK()).max_cost_usd == 0.30
     monkeypatch.setenv("PROBE_MAX_COST_USD", "2.5")
     assert client_for(tmp_path, sdk=StubSDK()).max_cost_usd == 2.5
     assert client_for(tmp_path, sdk=StubSDK(), max_cost_usd=0.25).max_cost_usd == 0.25
     monkeypatch.setenv("PROBE_MAX_COST_USD", "a lot")
     with pytest.raises(LLMError, match="PROBE_MAX_COST_USD must be a number"):
         client_for(tmp_path, sdk=StubSDK())
+
+
+# ---- the cumulative spend ledger (D9 item 3) -------------------------------------------
+
+def test_without_a_ledger_path_there_is_no_cumulative_check(tmp_path):
+    # Existing callers (and every other test in this file) pass no ledger_path: unaffected.
+    sdk = StubSDK(PLAN, PLAN, input_tokens=1_000_000, output_tokens=1_000_000)  # 12 USD each, no per-run cap set low
+    client = client_for(tmp_path, sdk=sdk, max_cost_usd=100)
+    client.call("plan", "s", "u", AppPlan)
+    client.call("plan", "s", "u", AppPlan)
+    assert client.spent_usd == pytest.approx(24)
+    assert client.ledger_path is None
+
+
+def test_the_ledger_is_shared_across_clients_and_blocks_once_it_is_already_over_budget(tmp_path):
+    ledger = tmp_path / "spend_ledger.jsonl"
+    sdk1 = StubSDK(PLAN, input_tokens=1_000_000, output_tokens=1_000_000)  # sonnet-5: 12 USD
+    first = client_for(tmp_path / "run1", sdk=sdk1, max_cost_usd=100, ledger_path=ledger, total_budget_usd=8)
+    first.call("plan", "s", "u", AppPlan)  # spent from THIS client's own cap; the ledger now holds 12
+
+    sdk2 = StubSDK(PLAN)
+    second = client_for(tmp_path / "run2", sdk=sdk2, max_cost_usd=100, ledger_path=ledger, total_budget_usd=8)
+    with pytest.raises(LLMError, match=r"already totals 12\.0000 USD, at or over PROBE_TOTAL_BUDGET_USD \(8\.00\)"):
+        second.call("plan", "s", "u", AppPlan)
+    assert sdk2.calls == []  # refused before any request was sent
+    assert len(ledger.read_text(encoding="utf-8").splitlines()) == 1  # only the first client's call is on it
+
+
+def test_the_ledger_refuses_once_it_is_at_or_over_the_total_budget(tmp_path):
+    # Checked BEFORE a call, when its cost is not yet known: landing exactly on the budget still
+    # blocks the NEXT call (unlike the per-run cap, which allows a call that lands exactly on it).
+    ledger = tmp_path / "spend_ledger.jsonl"
+    sdk = StubSDK(PLAN, PLAN, input_tokens=250_000, output_tokens=0)  # sonnet-5: exactly 0.50 USD per call
+    client = client_for(tmp_path, sdk=sdk, max_cost_usd=100, ledger_path=ledger, total_budget_usd=0.50)
+    client.call("plan", "s", "u", AppPlan)      # ledger was empty before this call: allowed
+    assert client._ledger_total() == pytest.approx(0.50)
+    with pytest.raises(LLMError, match="PROBE_TOTAL_BUDGET_USD"):
+        client.call("plan", "s", "u", AppPlan)  # ledger already at 0.50 of 0.50: refused
+
+
+def test_fake_and_replay_calls_never_touch_the_ledger(tmp_path):
+    ledger = tmp_path / "spend_ledger.jsonl"
+    client_for(tmp_path, mode="fake", source={"plan": [PLAN.model_dump()]}, ledger_path=ledger, total_budget_usd=0).call(
+        "plan", "s", "u", AppPlan)
+    assert not ledger.exists()  # a cap of 0 would refuse a real call instantly; fake mode never checks
+
+
+def test_the_total_budget_defaults_to_eight_dollars_and_can_be_set(tmp_path, monkeypatch):
+    assert DEFAULT_TOTAL_BUDGET_USD == 8.00
+    assert client_for(tmp_path, sdk=StubSDK(), ledger_path=tmp_path / "l.jsonl").total_budget_usd == 8.00
+    monkeypatch.setenv("PROBE_TOTAL_BUDGET_USD", "3")
+    assert client_for(tmp_path, sdk=StubSDK(), ledger_path=tmp_path / "l.jsonl").total_budget_usd == 3.0
+
+
+def test_ledger_path_falls_back_to_probe_spend_ledger(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_SPEND_LEDGER", str(tmp_path / "shared.jsonl"))
+    client = client_for(tmp_path, sdk=StubSDK())
+    assert client.ledger_path == tmp_path / "shared.jsonl"
+
+
+# ---- PROBE_LLM_SOURCE (D9 ruling 6) ----------------------------------------------------
+
+def test_fake_source_falls_back_to_probe_llm_source(tmp_path, monkeypatch):
+    path = tmp_path / "script.json"
+    path.write_text(json.dumps({"plan": [PLAN.model_dump()]}), encoding="utf-8")
+    monkeypatch.setenv("PROBE_LLM_SOURCE", str(path))
+    client = client_for(tmp_path, mode="fake")
+    assert client.call("plan", "s", "u", AppPlan)[0] == PLAN
 
 
 def test_the_price_table_is_sonnet_2_10_and_haiku_1_5_per_million(tmp_path):
