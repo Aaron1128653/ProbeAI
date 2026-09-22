@@ -12,6 +12,9 @@ GAP = r"\W+(?:\w+\W+){0,2}"  # up to two extra words between the two words of a 
 DEFAULT_BLOCKED_PATTERNS = [
     rf"\bdelet\w*{GAP}account",
     rf"\bclos\w*{GAP}account",
+    rf"\bremov\w*{GAP}account",
+    rf"\bcancel\w*{GAP}account",
+    rf"\bterminat\w*{GAP}account",
     r"\bdeactivat",
     r"\bpay",
     r"\bpurchas",

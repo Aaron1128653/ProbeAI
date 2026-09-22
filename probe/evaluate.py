@@ -35,7 +35,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from probe.agent import check_spend_confirmed, run_test
+from probe.agent import check_spend_confirmed, default_ledger_path, run_test
 from probe.browser import launch_chromium, new_context
 from probe.findings import CONFIRMED, LIKELY
 from probe.llm import DEFAULT_MAX_COST_USD, ENV_FILE, LLMClient, LLMError, load_dotenv
@@ -223,16 +223,18 @@ def main(argv=None):
         print(message, file=sys.stderr)
         raise SystemExit(2)
     n_runs = 2 * args.n + (0 if args.skip_injection else 1) + (1 if args.third_party_url else 0)
+    ledger_path = default_ledger_path(mode)
     if mode in ("real", "record"):
         cap = os.environ.get("PROBE_MAX_COST_USD") or str(DEFAULT_MAX_COST_USD)
-        print(f"Spending real API money: PROBE_LLM_MODE={mode}, up to {n_runs} runs, each capped at {cap} USD.")
+        print(f"Spending real API money: PROBE_LLM_MODE={mode}, up to {n_runs} runs, each capped at {cap} USD, "
+             f"shared spend ledger at {ledger_path}.")
 
     ground_truth = json.loads(GROUND_TRUTH_PATH.read_text(encoding="utf-8"))
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
 
     def make_llm(out_dir):
-        return LLMClient(out_dir, source=args.llm_source)
+        return LLMClient(out_dir, source=args.llm_source, ledger_path=ledger_path)
 
     with sync_playwright() as p:
         browser = launch_chromium(p)

@@ -19,10 +19,11 @@ from pathlib import Path
 import pytest
 
 from conftest import fresh_app, http, load_steps, make_entry, make_run, make_state
-from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, LIKELY, Meter, Profile,
+from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, LIKELY, AgentError, Meter, Profile,
                          build_mission_items, build_report, check_spend_confirmed, decide,
-                         diff_lines, disprove_prompt, judge_prompt, main, plan_prompt,
-                         replay_mission, run_mission, run_test, sanitize_judgement, step_prompt)
+                         default_ledger_path, diff_lines, disprove_prompt, judge_prompt, main,
+                         plan_prompt, replay_mission, run_mission, run_test, sanitize_judgement,
+                         step_prompt)
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS
 from probe.executor import Run, run_steps
@@ -280,6 +281,33 @@ def test_build_report_says_no_confirmed_issues_when_nothing_stuck():
     assert report["verdict"] == "no confirmed issues"
 
 
+# ---- Profile validation (T7-0b, docs/DECISIONS.md D11 item 3): a bad hand-built Profile used to
+# fail silently and wrong (e.g. replays=0 quietly makes Confirmed unreachable), not loudly --------
+
+def test_profile_accepts_the_built_in_values():
+    Profile("live", 3, 10, 6, 90, 1)
+    Profile("eval", 5, 15, 6, 180, 2)
+
+
+def test_profile_accepts_wall_clock_s_zero():
+    """A deliberately-used value (an already-expired profile, for testing the immediate-timeout
+    path) - must stay valid, not get swept up by validation meant for the other fields."""
+    Profile("instant", max_missions=5, max_total_steps=10, max_steps_per_mission=6,
+           wall_clock_s=0, replays=1)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("max_missions", 0), ("max_total_steps", 0), ("max_steps_per_mission", 0),
+    ("replays", 0), ("wall_clock_s", -1),
+])
+def test_profile_rejects_an_invalid_field(field, value):
+    kwargs = dict(name="bad", max_missions=3, max_total_steps=10, max_steps_per_mission=6,
+                 wall_clock_s=90, replays=1)
+    kwargs[field] = value
+    with pytest.raises(AgentError, match=field):
+        Profile(**kwargs)
+
+
 # ---- check_spend_confirmed(): the CLI's --yes-spend gate (D9 item 4) -------------------------
 
 @pytest.mark.parametrize("mode", ["real", "record"])
@@ -297,6 +325,28 @@ def test_fake_and_replay_never_need_yes_spend(mode):
 def test_the_spend_message_states_the_per_run_cap(monkeypatch):
     monkeypatch.delenv("PROBE_MAX_COST_USD", raising=False)
     assert str(DEFAULT_MAX_COST_USD) in check_spend_confirmed("real", False)
+
+
+# ---- default_ledger_path() (T7-0c, docs/DECISIONS.md D11 item 4): real/record used to leave the
+# cross-run cap off unless PROBE_SPEND_LEDGER was set by hand - which is what the one real run so
+# far actually relied on, not a CLI default. ----------------------------------------------------
+
+@pytest.mark.parametrize("mode", ["real", "record"])
+def test_default_ledger_path_is_on_for_real_and_record(mode, monkeypatch):
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+    assert default_ledger_path(mode) == "runs/spend_ledger.jsonl"
+
+
+@pytest.mark.parametrize("mode", ["fake", "replay", None])
+def test_default_ledger_path_is_off_for_fake_and_replay(mode, monkeypatch):
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+    assert default_ledger_path(mode) is None
+
+
+def test_default_ledger_path_respects_an_explicit_env_value(monkeypatch):
+    monkeypatch.setenv("PROBE_SPEND_LEDGER", "custom/ledger.jsonl")
+    assert default_ledger_path("real") == "custom/ledger.jsonl"
+    assert default_ledger_path("fake") is None  # still off regardless of the env value
     monkeypatch.setenv("PROBE_MAX_COST_USD", "0.05")
     assert "0.05" in check_spend_confirmed("real", False)
 
@@ -560,6 +610,53 @@ def test_main_with_yes_spend_passes_the_gate_and_reaches_llmclient(tmp_path, mon
         out, err = capsys.readouterr()
         assert "Spending real API money" in out  # the gate really was passed, not skipped
         assert "stub reached" in err
+    finally:
+        os.environ.pop("PROBE_LLM_MODE", None)
+
+
+def test_main_wires_the_default_ledger_path_into_llmclient(tmp_path, monkeypatch):
+    """Not just that default_ledger_path() itself returns the right value (tested above) - that
+    main() actually passes it to LLMClient. The same class of gap as sanitize_judgement's own
+    wiring test elsewhere in this file: a correct helper function nobody calls is no protection."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("PROBE_LLM_MODE=record\n", encoding="utf-8")
+    monkeypatch.setattr("probe.agent.ENV_FILE", env_file)
+    monkeypatch.delenv("PROBE_LLM_MODE", raising=False)
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+
+    seen = {}
+
+    def capture(out_dir, source=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        raise LLMError("stub reached")
+    monkeypatch.setattr("probe.agent.LLMClient", capture)
+
+    try:
+        with pytest.raises(SystemExit):
+            main(["--url", "http://example.invalid/", "--profile", "live",
+                 "--out", str(tmp_path / "out"), "--yes-spend"])
+        assert seen["ledger_path"] == "runs/spend_ledger.jsonl"
+    finally:
+        os.environ.pop("PROBE_LLM_MODE", None)
+
+
+def test_main_leaves_ledger_path_none_for_fake_mode(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("PROBE_LLM_MODE=fake\n", encoding="utf-8")
+    monkeypatch.setattr("probe.agent.ENV_FILE", env_file)
+    monkeypatch.delenv("PROBE_LLM_MODE", raising=False)
+
+    seen = {}
+
+    def capture(out_dir, source=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        raise LLMError("stub reached")
+    monkeypatch.setattr("probe.agent.LLMClient", capture)
+
+    try:
+        with pytest.raises(SystemExit):
+            main(["--url", "http://example.invalid/", "--profile", "live", "--out", str(tmp_path / "out")])
+        assert seen["ledger_path"] is None
     finally:
         os.environ.pop("PROBE_LLM_MODE", None)
 

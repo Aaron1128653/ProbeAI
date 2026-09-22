@@ -59,6 +59,25 @@ class Profile:
     wall_clock_s: float
     replays: int
 
+    def __post_init__(self):
+        """T7-0b (docs/DECISIONS.md D11 item 3): a bad hand-built Profile used to fail silently and
+        wrong, not loudly - replays=0 would skip every disprove call and every disprove-eligible
+        candidate would stay stuck below Confirmed forever, without a single error anywhere.
+        wall_clock_s == 0 is a real, intentionally-used value (a profile that is already "expired",
+        for testing the immediate-timeout path), so it must stay valid; everything else here needs
+        at least 1."""
+        if self.max_missions < 1:
+            raise AgentError(f"Profile {self.name!r}: max_missions must be at least 1, not {self.max_missions}")
+        if self.max_total_steps < 1:
+            raise AgentError(f"Profile {self.name!r}: max_total_steps must be at least 1, not {self.max_total_steps}")
+        if self.max_steps_per_mission < 1:
+            raise AgentError(f"Profile {self.name!r}: max_steps_per_mission must be at least 1, "
+                             f"not {self.max_steps_per_mission}")
+        if self.replays < 1:
+            raise AgentError(f"Profile {self.name!r}: replays must be at least 1, not {self.replays}")
+        if self.wall_clock_s < 0:
+            raise AgentError(f"Profile {self.name!r}: wall_clock_s must be at least 0, not {self.wall_clock_s}")
+
 
 PROFILES = {
     "live": Profile("live", max_missions=3, max_total_steps=10, max_steps_per_mission=6, wall_clock_s=90, replays=1),
@@ -529,6 +548,19 @@ def check_spend_confirmed(mode: str | None, yes_spend: bool) -> str | None:
     return None
 
 
+def default_ledger_path(mode: str | None) -> str | None:
+    """T7-0c (docs/DECISIONS.md D11 item 4): LLMClient's own ledger is opt-in (None = off), so
+    without this every CLI call spending real money was silently NOT sharing a cross-run cap
+    unless someone remembered to set PROBE_SPEND_LEDGER by hand - which is what the one real run
+    so far actually relied on. Every CLI that can spend money calls this the same way, so the
+    PROBE_TOTAL_BUDGET_USD cap in docs/DECISIONS.md D9 is never off by omission. fake/replay never
+    touch the ledger regardless (see LLMClient._check_ledger), so returning a path for them would
+    be harmless, but None keeps this function's contract honest: "on for real/record, off otherwise"."""
+    if mode not in ("real", "record"):
+        return None
+    return os.environ.get("PROBE_SPEND_LEDGER") or "runs/spend_ledger.jsonl"
+
+
 def _print_event(event: dict) -> None:
     rest = {k: v for k, v in event.items() if k not in ("type", "t")}
     print(f"[{event['t']:6.2f}s] {event['type']}: {json.dumps(rest, default=str)[:200]}")
@@ -565,7 +597,7 @@ def main(argv=None):
 
     out_dir = Path(args.out)
     try:
-        llm = LLMClient(out_dir, source=args.llm_source)
+        llm = LLMClient(out_dir, source=args.llm_source, ledger_path=default_ledger_path(mode))
         result = run_test(args.url, args.profile, llm, out_dir, on_event=_print_event, reset_path=args.reset_path)
     except (LLMError, AgentError) as exc:
         print(f"error: {exc}", file=sys.stderr)

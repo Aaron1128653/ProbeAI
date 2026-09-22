@@ -461,6 +461,23 @@ def test_safety_allows_in_app_crud_and_ordinary_names():
     assert not allowed and 'matches blocked pattern' in reason
 
 
+NEW_ACCOUNT_PHRASINGS = [  # T7-0a (docs/DECISIONS.md D11 item 1): missing before this
+    "Remove account", "Remove my account", "Removing your account",
+    "Cancel account", "Cancel my account", "Cancelling your account",
+    "Terminate account", "Terminate my account", "Terminating the account",
+]
+
+
+def test_safety_blocks_the_new_remove_cancel_terminate_account_phrasings():
+    """Kept separate from BLOCKED_NAMES above (which already passed before T7-0a) so a mutation
+    check - removing just the three new patterns - proves these phrasings were genuinely uncaught
+    before, not coincidentally matched by an existing pattern such as \\bpay or \\bdeactivat."""
+    policy = SafetyPolicy(APP)
+    for name in NEW_ACCOUNT_PHRASINGS:
+        assert not check(policy, fake_entry(name))[0], name
+    assert check(policy, fake_entry("Remove item"))[0]  # still fine: no "account" nearby
+
+
 def test_safety_blocks_typing_and_pressing_in_a_field_named_password():
     policy = SafetyPolicy(APP)
     password = fake_entry("Password", role="textbox")

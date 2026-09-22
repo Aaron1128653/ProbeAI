@@ -3,10 +3,12 @@ matching/scoring logic, plus one small real-browser, fake-LLM smoke test of the 
 against the real TaskBoard (mirrors tests/test_agent.py's end-to-end style; --n stays at 1 here,
 a full N=5 protocol run is what the CLI is for, not what a fast test suite needs).
 """
+import pytest
+
 from conftest import fresh_app
 from probe.evaluate import (add_query, check_injection_safety, evaluate_buggy, evaluate_clean,
-                            evaluate_injection, finding_text, matches_any, summarize)
-from probe.llm import LLMClient
+                            evaluate_injection, finding_text, main, matches_any, summarize)
+from probe.llm import LLMClient, LLMError
 from probe.schemas import AppPlan, JudgedFinding, Judgement, Mission, StepDecision, StepVerdict
 
 MISSION = Mission(id="m1", goal="Delete an existing task", category="core_flow",
@@ -156,3 +158,92 @@ def test_evaluate_injection_passes_when_the_mission_ignores_the_canary_task(serv
     result = evaluate_injection(inject_url, make_llm, browser, tmp_path / "injection")
     assert result["passed"] is True
     assert result["problems"] == []
+
+
+# ---- main()'s CLI wiring: the ledger default actually reaches LLMClient (T7-0c, D11 item 4) ----
+# main() launches its own sync_playwright() unconditionally, before it knows whether the LLM
+# client will even work - which conflicts with the module-level `browser` fixture's own already-
+# open sync_playwright() session when both run in the same thread ("Please use the Async API
+# instead" - confirmed this is exactly the conflict, not a logic bug in the fix, by seeing it
+# appear only when this file's other real-browser tests run first in the same session). Rather
+# than pay for a real subprocess, these stub out sync_playwright()/launch_chromium() themselves:
+# with --n 0 the buggy/clean loops are no-ops and injection's make_llm() call (which is what
+# actually needs checking here) happens before the fake browser object is ever touched.
+
+class _FakePlaywright:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+class _FakeContext:
+    def close(self):
+        pass
+
+
+class _FakeBrowser:
+    def new_context(self, **kwargs):
+        return _FakeContext()  # evaluate_buggy opens a "plumbing" context before its --n loop runs
+
+    def close(self):
+        pass
+
+
+def _stub_playwright(monkeypatch):
+    monkeypatch.setattr("probe.evaluate.sync_playwright", lambda: _FakePlaywright())
+    monkeypatch.setattr("probe.evaluate.launch_chromium", lambda p: _FakeBrowser())
+
+
+def test_main_wires_the_default_ledger_path_for_record_mode(tmp_path, monkeypatch):
+    _stub_playwright(monkeypatch)
+    monkeypatch.setenv("PROBE_LLM_MODE", "record")
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+
+    seen = {}
+
+    def capture(out_dir, source=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        raise LLMError("stub reached")
+    monkeypatch.setattr("probe.evaluate.LLMClient", capture)
+    monkeypatch.setattr("probe.evaluate.load_dotenv", lambda *a, **k: None)  # this machine's own .env must not interfere
+
+    with pytest.raises(SystemExit):
+        main(["--demo-url", "http://example.invalid/", "--out", str(tmp_path / "out"), "--n", "0", "--yes-spend"])
+    assert seen["ledger_path"] == "runs/spend_ledger.jsonl"
+
+
+def test_main_leaves_ledger_path_none_for_fake_mode(tmp_path, monkeypatch):
+    _stub_playwright(monkeypatch)
+    monkeypatch.setenv("PROBE_LLM_MODE", "fake")
+
+    seen = {}
+
+    def capture(out_dir, source=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        raise LLMError("stub reached")
+    monkeypatch.setattr("probe.evaluate.LLMClient", capture)
+    monkeypatch.setattr("probe.evaluate.load_dotenv", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit):
+        main(["--demo-url", "http://example.invalid/", "--out", str(tmp_path / "out"), "--n", "0"])
+    assert seen["ledger_path"] is None
+
+
+def test_main_respects_an_explicit_probe_spend_ledger_for_real_mode(tmp_path, monkeypatch):
+    _stub_playwright(monkeypatch)
+    monkeypatch.setenv("PROBE_LLM_MODE", "real")
+    monkeypatch.setenv("PROBE_SPEND_LEDGER", "custom/ledger.jsonl")
+
+    seen = {}
+
+    def capture(out_dir, source=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        raise LLMError("stub reached")
+    monkeypatch.setattr("probe.evaluate.LLMClient", capture)
+    monkeypatch.setattr("probe.evaluate.load_dotenv", lambda *a, **k: None)
+
+    with pytest.raises(SystemExit):
+        main(["--demo-url", "http://example.invalid/", "--out", str(tmp_path / "out"), "--n", "0", "--yes-spend"])
+    assert seen["ledger_path"] == "custom/ledger.jsonl"
