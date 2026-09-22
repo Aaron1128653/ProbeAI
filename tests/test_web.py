@@ -149,14 +149,17 @@ def test_a_raised_exception_produces_one_error_event_with_run_status_failed(monk
 
 def test_status_remembers_the_last_run_after_it_finishes(monkeypatch):
     events = [{"type": "run_finished", "t": 1.0, "report": {"counts": {}, "timed_out": False}}]
-    result = result_of(missions=[{"id": "m1", "goal": "g", "status": "done", "steps": 1}])
+    finding = {"id": "C1", "tier": "Confirmed", "title": "Delete fails"}
+    result = result_of(missions=[{"id": "m1", "goal": "g", "status": "done", "steps": 1}], findings=[finding])
     monkeypatch.setattr(server, "run_test", fake_run_test(events, result=result))
     with TestClient(server.app) as client:
         start_and_drain(client)
         status = client.get("/api/status").json()
     assert status["running"] is False
+    assert status["run_id"] is None  # only exposed while a run is in progress
     assert status["last_run_status"] == "completed"
     assert status["last_report"] is not None
+    assert status["last_findings"] == [finding]  # so a page reload can rebuild the finding cards
 
 
 # ---- concurrency: one run at a time -------------------------------------------------------------

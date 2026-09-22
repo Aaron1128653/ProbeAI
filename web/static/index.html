@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ProbeAI</title>
+<style>
+  :root {
+    --canvas: #ffffff;
+    --surface: #fafafa;
+    --border: rgba(0,0,0,.08);
+    --text: #1a1a1a;
+    --muted: #6b7280;
+    --accent: #4f46e5;
+    --accent-bg: #eef2ff;
+    --confirmed: #dc2626; --confirmed-bg: #fee2e2;
+    --likely: #d97706;    --likely-bg: #fef3c7;
+    --dropped: #6b7280;   --dropped-bg: #f3f4f6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px; line-height: 1.5;
+  }
+  .mono { font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+
+  /* Mode banner: full-width, unmissable, never a small badge (D10 + amendment point 3) */
+  .banner { padding: 10px 20px; font-weight: 600; text-align: center; color: #fff; font-size: 14px; }
+  .banner.live   { background: #16a34a; }
+  .banner.replay { background: #d97706; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+          padding: 20px; margin-bottom: 20px; }
+  .card.headline { background: #fff; box-shadow: 0 4px 16px rgba(0,0,0,.06); }
+
+  .row { display: flex; gap: 12px; align-items: center; }
+  input[type=text] { flex: 1; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px;
+                      font-size: 14px; font-family: inherit; }
+  input[disabled] { background: #f3f4f6; color: var(--muted); }
+  .field-note { color: var(--muted); font-size: 12.5px; margin: 6px 0 0; }
+  button { padding: 10px 20px; border: none; border-radius: 8px; background: var(--accent); color: #fff;
+           font-size: 14px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  button:disabled { background: #c7c9f5; cursor: not-allowed; }
+
+  details.advanced { margin-top: 12px; font-size: 13px; }
+  details.advanced summary { color: var(--muted); cursor: pointer; }
+  details.advanced input { margin-top: 8px; width: 100%; }
+
+  /* run_status line: must be at least as prominent as the verdict headline (amendment point 2) -
+     22px matches .verdict exactly, so a change to one is a visible reminder to check the other. */
+  .status-line { padding: 14px 16px; border-radius: 8px; font-weight: 700; font-size: 22px; margin-bottom: 16px; }
+  .status-line.partial { background: var(--likely-bg); color: var(--likely); }
+  .status-line.failed  { background: var(--confirmed-bg); color: var(--confirmed); }
+  .status-line .detail { display: block; font-weight: 400; font-size: 13.5px; margin-top: 4px; }
+
+  .log { font-size: 13.5px; margin-bottom: 8px; }
+  .log .line { padding: 3px 0; color: var(--muted); }
+  .log .line .t { display: inline-block; width: 58px; color: #9ca3af; }
+
+  .verdict { font-size: 22px; font-weight: 700; margin: 0 0 12px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .pill { padding: 4px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 700; }
+  .pill.Confirmed   { background: var(--confirmed-bg); color: var(--confirmed); }
+  .pill.Likely      { background: var(--likely-bg);    color: var(--likely); }
+  .pill.Improvement { background: var(--accent-bg);    color: var(--accent); }
+  .pill.Dropped     { background: var(--dropped-bg);   color: var(--dropped); }
+  .meta { color: var(--muted); font-size: 13px; }
+
+  .finding { border-left: 3px solid var(--border); padding-left: 14px; margin-bottom: 16px; }
+  .finding .badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 11px;
+                     font-weight: 700; text-transform: uppercase; letter-spacing: .03em; margin-right: 8px; }
+  .finding .title { font-weight: 600; }
+  .finding .row2 { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .finding .text { margin-top: 8px; font-size: 13.5px; }
+  .finding details { margin-top: 8px; font-size: 13px; color: var(--muted); }
+  .finding .shots { margin-top: 10px; display: flex; gap: 10px; }
+  .finding .shots img { max-width: 200px; border: 1px solid var(--border); border-radius: 6px; display: block; }
+
+  .dropped-box summary { color: var(--muted); font-size: 13.5px; cursor: pointer; }
+  .dropped-item { padding: 6px 0; border-top: 1px solid var(--border); font-size: 13px; }
+
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="wrap">
+    <h1>ProbeAI</h1>
+    <p class="sub">Point it at a running app. It decides what to test, tests it in a real browser, and reports what it found.</p>
+
+    <div class="card">
+      <div class="row">
+        <input id="url" type="text" placeholder="https://your-app.example/" autocomplete="off">
+        <button id="runBtn">Run test</button>
+      </div>
+      <p id="urlNote" class="field-note" hidden></p>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <input id="resetPath" type="text" placeholder="Reset path (optional), e.g. /__reset" autocomplete="off">
+      </details>
+    </div>
+
+    <div id="statusLine" hidden></div>
+    <div id="log" class="log mono"></div>
+    <div id="report" class="card headline" hidden></div>
+    <div id="findings"></div>
+    <details id="droppedBox" class="dropped-box" hidden>
+      <summary id="droppedSummary"></summary>
+      <div id="droppedList"></div>
+    </details>
+  </div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let currentRunId = null;
+let droppedItems = [];
+
+function escapeHtml(s) {
+  const d = document.createElement("div");
+  d.textContent = s === undefined || s === null ? "" : s;
+  return d.innerHTML;
+}
+
+// ---- mode banner: always visible, first thing under the title (D10, amendment point 3) --------
+
+function setBanner(mode, replayUrl) {
+  const b = $("banner");
+  b.hidden = false;
+  if (mode === "replay") {
+    b.className = "banner replay";
+    b.textContent = "REPLAY — showing a recorded real run, no API call happens now";
+  } else {
+    b.className = "banner live";
+    b.textContent = "LIVE · Claude API — this call uses the real API";
+  }
+}
+
+// ---- the live event log: plain language, same spirit as the CLI's own output (D10) ------------
+
+function logLine(text, t) {
+  const div = document.createElement("div");
+  div.className = "line";
+  div.innerHTML = `<span class="t">[${t.toFixed(2)}s]</span> ${escapeHtml(text)}`;
+  $("log").appendChild(div);
+}
+
+function plainTextFor(event) {
+  switch (event.type) {
+    case "run_started":   return `Looking at ${event.url}…`;
+    case "plan":           return `Understood the app: ${event.app_type}. ${event.missions.length} thing(s) worth checking.`;
+    case "mission_started": return `Checking: ${event.mission.goal}`;
+    case "mission_judged": return `Finished: ${event.mission} (${event.findings} found)`;
+    default: return null;
+  }
+}
+
+// ---- run_status: rendered separately from, and at least as prominent as, the verdict ----------
+// (amendment point 1/2: a partial or failed run must never read as a clean pass)
+
+function renderStatusLine(runStatus, message) {
+  const el = $("statusLine");
+  if (runStatus === "completed" || !runStatus) { el.hidden = true; return; }
+  el.hidden = false;
+  el.className = "status-line " + runStatus;
+  if (runStatus === "partial") {
+    el.innerHTML = "⚠ This scan did not finish. " +
+      '<span class="detail">The findings below are real, but absence of a Confirmed issue does not mean the app passed — the sweep was cut short.</span>';
+  } else if (runStatus === "failed") {
+    el.innerHTML = "This test could not finish" + (message ? ": " + escapeHtml(message) : ".") +
+      '<span class="detail">There is nothing to review below.</span>';
+  }
+}
+
+// ---- the Release Check card (D6) ---------------------------------------------------------------
+
+function renderReport(report) {
+  const box = $("report");
+  box.hidden = false;
+  const counts = report.counts || {};
+  const verdictText = (counts.Confirmed || counts.Likely) ? "Review before release" : "No confirmed issues";
+  const verdictColor = counts.Confirmed ? "var(--confirmed)" : (counts.Likely ? "var(--likely)" : "var(--text)");
+  const tiers = ["Confirmed", "Likely", "Improvement", "Dropped"];
+  box.innerHTML = `
+    <div class="verdict" style="color:${verdictColor}">${escapeHtml(verdictText)}</div>
+    <div class="pills">${tiers.map(t => `<span class="pill ${t}">${t}: ${counts[t] || 0}</span>`).join("")}</div>
+    <div class="meta">Elapsed ${report.elapsed_s}s · ${report.llm_calls} model call(s) · ~$${(report.estimated_cost_usd || 0).toFixed(4)}</div>`;
+}
+
+// ---- finding cards: Confirmed/Likely/Improvement get a card; Dropped is a collapsed line only --
+
+function shotUrl(runId, mission, filename) {
+  return `/api/runs/${runId}/shots/${mission}/${filename}`;
+}
+
+function findingCard(f) {
+  const div = document.createElement("div");
+  div.className = "finding";
+  const shots = (f.mission && f.screenshot_before && f.screenshot_after) ? `
+    <div class="shots">
+      <a href="${shotUrl(currentRunId, f.mission, f.screenshot_before)}" target="_blank" rel="noopener">
+        <img src="${shotUrl(currentRunId, f.mission, f.screenshot_before)}" alt="before" loading="lazy"></a>
+      <a href="${shotUrl(currentRunId, f.mission, f.screenshot_after)}" target="_blank" rel="noopener">
+        <img src="${shotUrl(currentRunId, f.mission, f.screenshot_after)}" alt="after" loading="lazy"></a>
+    </div>` : "";
+  const expectedObserved = (f.expected || f.observed) ? `
+    <div class="text">Expected: ${escapeHtml(f.expected || "—")}<br>Observed: ${escapeHtml(f.observed || "—")}</div>` : "";
+  const impact = f.impact ? `<div class="text">${escapeHtml(f.impact)}</div>` : "";
+  const suggestion = f.suggestion ? `<div class="text"><em>${escapeHtml(f.suggestion)}</em></div>` : "";
+  const steps = (f.steps_to_reproduce && f.steps_to_reproduce.length) ? `
+    <details><summary>Steps to reproduce</summary><ol>${f.steps_to_reproduce.map(s => `<li>${escapeHtml(s)}</li>`).join("")}</ol></details>` : "";
+  div.innerHTML = `
+    <span class="badge pill ${f.tier}">${escapeHtml(f.tier)}</span>
+    <span class="title">${escapeHtml(f.title || "(untitled)")}</span>
+    <div class="row2">Severity: ${escapeHtml(f.severity || "—")} · Reproduced ${escapeHtml(f.reproduced || "—")}</div>
+    ${impact}${expectedObserved}${suggestion}${steps}${shots}`;
+  return div;
+}
+
+function updateDroppedBox() {
+  const box = $("droppedBox");
+  if (!droppedItems.length) { box.hidden = true; return; }
+  box.hidden = false;
+  $("droppedSummary").textContent = `${droppedItems.length} item(s) looked at and dismissed, and why`;
+  $("droppedList").innerHTML = droppedItems.map(f =>
+    `<div class="dropped-item"><strong>${escapeHtml(f.title || "(untitled)")}</strong> — ${escapeHtml(f.reason || "")}</div>`
+  ).join("");
+}
+
+function handleFinding(f) {
+  if (f.tier === "Dropped") { droppedItems.push(f); updateDroppedBox(); return; }
+  $("findings").appendChild(findingCard(f));
+}
+
+function renderFindings(findings) {
+  (findings || []).forEach(handleFinding);
+}
+
+// ---- driving one run: the button disables the instant it is clicked (amendment point 5) -------
+
+function resetView() {
+  $("log").innerHTML = "";
+  $("findings").innerHTML = "";
+  droppedItems = [];
+  $("droppedBox").hidden = true;
+  $("report").hidden = true;
+  $("statusLine").hidden = true;
+}
+
+function setRunning(running) {
+  $("runBtn").disabled = running;
+  $("runBtn").textContent = running ? "Running…" : "Run test";
+}
+
+function attachStream(runId) {
+  currentRunId = runId;
+  setRunning(true);
+  const es = new EventSource(`/api/stream?run_id=${encodeURIComponent(runId)}`);
+  es.onmessage = (ev) => {
+    const event = JSON.parse(ev.data);
+    const text = plainTextFor(event);
+    if (text) logLine(text, event.t);
+    if (event.type === "finding") handleFinding(event);
+    if (event.type === "run_finished") {
+      renderStatusLine(event.run_status, null);
+      if (event.run_status !== "failed") renderReport(event.report);
+      setRunning(false);
+      es.close();
+    }
+    if (event.type === "error") {
+      logLine(`Error: ${event.message}`, event.t);
+      renderStatusLine("failed", event.message);
+      setRunning(false);
+      es.close();
+    }
+  };
+  es.onerror = () => { /* the server closes the stream itself right after the terminal event */ };
+}
+
+$("runBtn").addEventListener("click", async () => {
+  setRunning(true);           // disable immediately, before the fetch resolves (amendment point 5)
+  resetView();
+  const body = { url: $("url").value, reset_path: $("resetPath").value || null };
+  try {
+    const resp = await fetch("/api/run", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    if (resp.status === 409) {
+      setRunning(false);
+      alert("A test is already running.");
+      return;
+    }
+    const data = await resp.json();
+    attachStream(data.run_id);
+  } catch (e) {
+    setRunning(false);
+    alert("Could not start the test: " + e);
+  }
+});
+
+// ---- on load: mode banner always shows first (D10), then reattach to a run in progress or -----
+// show the last finished run, so a reload never loses the answer (amendment point 6) ------------
+
+async function loadStatus() {
+  const resp = await fetch("/api/status");
+  const status = await resp.json();
+  setBanner(status.mode, status.replay_url);
+  if (status.mode === "replay") {
+    $("url").value = status.replay_url || "";
+    $("url").disabled = true;
+    $("urlNote").hidden = false;
+    $("urlNote").textContent = "Replay mode always tests the same recorded app.";
+  }
+  if (status.running && status.run_id) {
+    attachStream(status.run_id);
+  } else if (status.last_report) {
+    currentRunId = status.run_id;
+    renderStatusLine(status.last_run_status, null);
+    if (status.last_run_status !== "failed") {
+      renderReport(status.last_report);
+      renderFindings(status.last_findings);
+    }
+  }
+}
+
+loadStatus();
+</script>
+</body>
+</html>

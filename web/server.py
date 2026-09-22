@@ -41,7 +41,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from probe.agent import PROFILES, RunResult, check_spend_confirmed, run_test
+from probe.agent import PROFILES, Profile, RunResult, check_spend_confirmed, run_test
 from probe.llm import DEFAULT_MAX_COST_USD, DEFAULT_TOTAL_BUDGET_USD, ENV_FILE, MODES, LLMClient, load_dotenv
 
 STATIC = Path(__file__).parent / "static"
@@ -67,6 +67,27 @@ def total_budget_usd() -> float:
         return float(os.environ.get("PROBE_TOTAL_BUDGET_USD") or DEFAULT_TOTAL_BUDGET_USD)
     except ValueError:
         return DEFAULT_TOTAL_BUDGET_USD
+
+
+def run_profile() -> Profile | str:
+    """The profile a run actually uses. In replay mode this is NOT PROFILES["live"] (found while
+    testing this): a recording only ever has as many "step"/"judge"/"disprove" answers as the
+    missions that were actually explored when it was made - the raw "plan" answer itself can (and
+    for the 2026-09-22 recording, does: 5 proposed missions, 4 recorded step answers) list more
+    missions than that. Replaying under the standard 3-mission profile tried a second mission the
+    recording never explored and ran out of answers mid-run. PROBE_REPLAY_MAX_MISSIONS (default 1,
+    matching every recording made so far) keeps replay honest about what it can actually replay;
+    change it only alongside making a new, larger recording."""
+    if MODE != "replay":
+        return "live"
+    try:
+        max_missions = int(os.environ.get("PROBE_REPLAY_MAX_MISSIONS") or 1)
+    except ValueError:
+        max_missions = 1
+    live = PROFILES["live"]
+    return Profile("replay", max_missions=max_missions, max_total_steps=live.max_total_steps,
+                   max_steps_per_mission=live.max_steps_per_mission, wall_clock_s=live.wall_clock_s,
+                   replays=live.replays)
 
 
 def validate_startup(mode: str | None, yes_spend: bool, replay_url: str | None) -> str | None:
@@ -106,6 +127,7 @@ class RunState:
     running: bool = False
     last_run_status: str | None = None
     last_report: dict | None = None
+    last_findings: list | None = None
 
 
 STATE = RunState(lock=threading.Lock())
@@ -127,7 +149,7 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
         llm = LLMClient(out_dir, mode=MODE)  # source=None: falls back to PROBE_LLM_SOURCE if fake/replay
         # browser=None: run_test() launches and closes its own here, in this plain thread (see the
         # module docstring for why it cannot be a single browser shared from the async lifespan).
-        result = run_test(url, PROFILES["live"], llm, out_dir, on_event=on_event, reset_path=reset_path)
+        result = run_test(url, run_profile(), llm, out_dir, on_event=on_event, reset_path=reset_path)
     except Exception as exc:
         message = str(exc) or type(exc).__name__
         q.put({"type": "error", "t": round(time.monotonic() - start, 3), "run_status": "failed",
@@ -136,6 +158,7 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
             STATE.running = False
             STATE.last_run_status = "failed"
             STATE.last_report = None
+            STATE.last_findings = None
         return
 
     run_status = compute_run_status(result)
@@ -148,6 +171,7 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
         STATE.running = False
         STATE.last_run_status = run_status
         STATE.last_report = result.report
+        STATE.last_findings = result.findings
 
 
 # ---- FastAPI app ------------------------------------------------------------------------------
@@ -185,8 +209,10 @@ def status():
             "total_budget_usd": total_budget_usd(),
             "replay_url": REPLAY_URL if MODE == "replay" else None,
             "running": STATE.running,
+            "run_id": STATE.run_id if STATE.running else None,  # lets a page reload reattach to /api/stream
             "last_run_status": STATE.last_run_status,
             "last_report": STATE.last_report,
+            "last_findings": STATE.last_findings,
         }
 
 
@@ -202,12 +228,15 @@ def start_run(body: RunRequest):
         STATE.running = True
         STATE.last_run_status = None
         STATE.last_report = None
+        STATE.last_findings = None
 
     url = REPLAY_URL if MODE == "replay" else body.url
     out_dir = RUNS_DIR / f"web_{run_id}"
     thread = threading.Thread(target=_run_in_background, args=(url, body.reset_path, out_dir, q), daemon=True)
     thread.start()
-    return {"run_id": run_id, "mode": MODE, "cap_usd": cap_usd(), "profile": "live"}
+    profile = run_profile()
+    profile_name = profile if isinstance(profile, str) else profile.name
+    return {"run_id": run_id, "mode": MODE, "cap_usd": cap_usd(), "profile": profile_name}
 
 
 @app.get("/api/stream")
