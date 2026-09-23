@@ -217,6 +217,52 @@ Commit: see `docs/WORKLOG.md`. 222 tests pass; each of the three fixes has a reg
 
 **First real API run (2026-09-22, after the fixes above, user confirmed a Console spend limit of $15).** Mode `record` (not `real`), single-mission custom profile (D9/T5b's plan), $0.10 per-run cap, cross-run ledger explicitly enabled (`runs/spend_ledger.jsonl`, default $8 total budget). Run against the buggy TaskBoard, one mission ("add a task and verify it appears"), 3 real steps, judge call, no disprove call needed (the only signal was `no_effect` on a textbox-focus click, correctly judged not-violated). Result: **6 LLM calls, 8399 input / 1071 output tokens, cost $0.020443** (about a fifth of the per-run cap), wall clock 25.9 s for the mission plus the plan call, no crashes, no fallback needed. `claude-haiku-4-5` made all 4 "step" calls successfully with `output_format=StepDecision` and `thinking: disabled` - **this resolves D7 point 5's open question**: no fallback to Sonnet 5 for steps is needed. `llm_record.jsonl` was written, so T6's UI can be built against a zero-cost `replay` of this exact run. The gate (`check_spend_confirmed`) and the ledger (`_check_ledger`) were both exercised for real, not simulated, confirming yesterday's review fix actually holds under a real call.
 
+## D13 - Verifying the real disprove call, and what the judge's contradicting verdicts actually mean  (2026-09-23)
+
+Two things, both prompted by T9-b's result: the disprove pass is now the last unverified claim in the trust pipeline, and the judge's finding-vs-verdict disagreement needed explaining before anyone decides whether to "fix" it. The audit below is zero-cost (recorded runs only). No money is spent by this decision; it authorises a task, and the task itself still needs a separate go.
+
+### Part 1 - the zero-cost audit: the judge is not being inconsistent, the verdict channel is too narrow
+
+Swept every recorded judge answer in all three batches (95 judge calls) for a `kind="bug"` finding whose own step carries `violated=false`.
+
+| Batch | Judge calls | Contradictions | Consistent |
+|---|---|---|---|
+| 2026-09-22 (N=5, pre-T8-b) | 55 | 1 | 28 |
+| 2026-09-23 (N=3, with T8-b) | 35 | 2 | 19 |
+| 2026-09-23 (canary) | 5 | 1 | 4 |
+
+4 in 95. But the pattern is the finding, not the rate: **all four are the items-left counter (S6)**, not scattered across finding types. Reading the actual text shows two distinct causes, and neither is the model being incoherent.
+
+- **Compound expectation, partially met.** The step agent registers one `expect` string containing several claims - *"the checkbox shows a checkmark, **the item count changes to '2 items left'**, and the task remains visible"* - and the judge must collapse that into one boolean. The checkbox part held, the count part did not. `buggy_2`'s verdict reason says so in as many words: *"matching expectation, **though item count text should be checked separately**"*. The model is telling us the boolean cannot carry its answer.
+- **The finding exceeds the expectation's scope.** In the canary run the expectation was only *"The checkbox for 'Buy milk' becomes checked"*. That was met, so `violated=false` is **correct** - and the counter defect the judge separately reported from the page state is **also correct**. Both outputs are right at once.
+
+The second case is the consequential one, and it is new: T8-b gave the judge the whole post-step page, so it can now see defects the pre-registered expectation never mentioned - which is exactly what we wanted - while **D8 ruling 2 still assumes every finding arises from a violated expectation** and demotes a contextual-only candidate to Dropped whenever `judge_violated=False`. That is why S6 landed Dropped in the canary run yet Likely 3/3 in the N=3 runs: recognition currently depends on whether the step agent happened to write "the count should change" into its `expect`.
+
+**Ruling: this is a structural mismatch, not model noise, and it therefore needs a rule rather than a retry.** It is also the same family as D12's clean-build false positive (no way to say "the expectation itself was invalid") - one boolean per step is carrying three different questions: was the expectation met, was the expectation valid, and is there a defect here regardless. **No schema or prompt changes now**, per the standing instruction and because this touches D8 ruling 2, a tier rule that changes reported numbers. Recorded as the next decision to take, with the D12-deferred retraction gap folded into it, since both are the same channel.
+
+### Part 2 - verifying the real disprove call
+
+The disprove pass has had three real opportunities and executed **zero** times: 0 calls in the N=5 batch, 0 in N=3, 0 in the canary. Every candidate hit one of the four `continue` branches first. Its configuration could never have worked until T9-a, and T9-a is proven only by unit tests and mutation checks.
+
+- **A. Targeted contract check: replay a real recorded candidate through exactly one real `disprove` call.** Take a genuine contextual-only, fully-reproduced candidate from a recorded run (verified to exist: `C1`, `no_effect`, reproduced 2/2, in both `runs/eval_2026-09-23_canary/injection` and `runs/eval_2026-09-23_n3/buggy_1`), rebuild the prompt with the real `disprove_prompt()`, and make one real call. Deterministic, ~$0.01, and it tests the actual contract: real prompt shape, real model, parses into `Disproof`, no `max_tokens` cut-off, usage recorded.
+- **B. Keep running full agent runs until one happens to reach the gate.** Rejected: three real opportunities produced zero calls, so the expected cost is unbounded at roughly $0.09 a run, and it would burn the remaining budget on luck.
+- **C. Contrive a target app or mission that forces the gate.** Rejected: cheaper than B but it manufactures the condition, and a manufactured condition is exactly what this project keeps refusing to report as evidence.
+
+**Decision: A.** And the framing matters as much as the method: **this is an API contract check, not an evaluation result.** It verifies that a real disprove call works end to end. It says nothing about whether the disprove pass *judges well* - one call on one candidate is not a measurement of judgement - and it must never be quoted alongside the N=3/N=5 numbers. It lives outside the test suite (which must never spend money, and whose autouse fixture fails any socket connect) as an explicitly invoked script gated behind `--yes-spend`, exactly like the other real-money entry points.
+
+Criteria 1-4 (a real call is made, a valid `Disproof` comes back, no `max_tokens`, usage/latency/cost recorded) are verified live by this check. **Criterion 5 is not, and should not be faked**: forcing a real API failure cheaply is not possible, so "a failed disprove degrades rather than aborts" stays covered by T9-a's unit test and its mutation check. The script should say which criteria it did and did not verify, in its own output.
+
+**Consequences.** The last unverified claim in the trust pipeline gets closed for about a cent, with an honest ceiling on what it proves. One new artifact under `runs/` (git-ignored) plus a line in the ledger. The judge-verdict mismatch is now explained and bounded rather than guessed at, and is queued as its own decision instead of being patched reactively.
+
+**Q&A.** "The step that argues against my own findings had never actually run against the real model - it only ever fires under conditions that hadn't come up yet. Rather than pay for repeated full test runs hoping to trigger it, I replayed one real recorded finding through it once, for about a cent, and I'm clear that this proves the call works, not that its judgement is good."
+
+### Tasks for /build - D13 (T10)
+
+- **T10-a The disprove contract check (script only, no spend yet).** A small explicitly-invoked script (mirroring the existing real-money entry points: mode from `PROBE_LLM_MODE`, `--yes-spend` required, ledger wired via `default_ledger_path`, per-run cap left at its default) that loads a recorded contextual-only fully-reproduced candidate from a run directory, rebuilds the prompt with the real `disprove_prompt()`, makes exactly **one** call, and prints/writes: the parsed `Disproof`, the stop reason, input/output tokens, latency, cost, and an explicit line stating that criteria 1-4 were checked live and criterion 5 is covered by `test_a_failed_disprove_call_leaves_the_candidate_at_likely_instead_of_killing_the_run`, not by this run. *Accept*: in `fake` mode with a scripted `Disproof` it runs end to end and prints the report with zero spend; it refuses to run in `real`/`record` without `--yes-spend`; `pytest -q` green. **Do not make the real call in this task.**
+- **T10-b Make the one real call** (~$0.01, needs a separate go from the user): run T10-a's script in `record` mode with `--yes-spend`. *Accept*: a real `disprove` call appears in the recorded log with a parsed `Disproof`, `stop_reason` is not `max_tokens`, and the cost lands near $0.01. Report the result as a contract check, explicitly not as an evaluation number, and update `docs/WORKLOG.md` and `docs/AUDIT_GUIDE.md`'s "what is verified" section.
+
+---
+
 ## D12 - Failure attribution on the real T7 evaluation, and the one tuning experiment it justifies  (2026-09-23)
 
 No prompt was touched before this. The attribution below reads only the already-recorded runs in `runs/eval_2026-09-22/` (which store the full `system` + `user` + `answer` of every call), cost nothing, and made no API calls. It changes yesterday's conclusion in two places, so it was worth doing before tuning anything.
