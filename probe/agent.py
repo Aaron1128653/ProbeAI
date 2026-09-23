@@ -79,8 +79,17 @@ class Profile:
             raise AgentError(f"Profile {self.name!r}: wall_clock_s must be at least 0, not {self.wall_clock_s}")
 
 
+# live's wall clock was 90 s until 2026-09-23 (T12). Presentation headroom only - no other number
+# here moved. Measured from the real N=3 runs: median 107 s at 15 steps, of which ~69% (73 s of
+# 107 s) is API latency, the part a venue hotspot makes worse. live does 10 steps, so it projects
+# to ~71 s. At 90 s that leaves ~19 s of margin - roughly a +39% latency rise trips it, and a
+# tripped timeout renders the amber "This scan did not finish" banner, which reads as failure on
+# stage even though it is the tool being honest. At 120 s it takes an API-latency *doubling*.
+# 150 s was rejected: the worst case would put 2.5 minutes of dead air into a 10-minute talk, and
+# CLAUDE.md's own target is "about 2 minutes". If rehearsals keep approaching 120 s the next move
+# is to cut the work (3 missions -> 2), not to raise this again.
 PROFILES = {
-    "live": Profile("live", max_missions=3, max_total_steps=10, max_steps_per_mission=6, wall_clock_s=90, replays=1),
+    "live": Profile("live", max_missions=3, max_total_steps=10, max_steps_per_mission=6, wall_clock_s=120, replays=1),
     "eval": Profile("eval", max_missions=5, max_total_steps=15, max_steps_per_mission=6, wall_clock_s=180, replays=2),
 }
 

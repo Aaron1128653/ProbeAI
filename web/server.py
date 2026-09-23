@@ -41,7 +41,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from probe.agent import PROFILES, Profile, RunResult, check_spend_confirmed, run_test
+from probe.agent import (PROFILES, Profile, RunResult, check_spend_confirmed, default_ledger_path,
+                         run_test)
 from probe.llm import DEFAULT_MAX_COST_USD, DEFAULT_TOTAL_BUDGET_USD, ENV_FILE, MODES, LLMClient, load_dotenv
 
 STATIC = Path(__file__).parent / "static"
@@ -146,7 +147,15 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
         q.put(event)
 
     try:
-        llm = LLMClient(out_dir, mode=MODE)  # source=None: falls back to PROBE_LLM_SOURCE if fake/replay
+        # ledger_path: T12. This was the ONE spend-capable entry point not wired through
+        # default_ledger_path() - probe/agent.py, probe/evaluate.py and probe/check_disprove.py all
+        # were, since T7-0c. D10 had said the web server need not re-implement this because
+        # LLMClient reads PROBE_SPEND_LEDGER from the environment itself; T7-0c then changed the
+        # convention to default the path when that variable is unset, and this path was left behind.
+        # With PROBE_SPEND_LEDGER empty in .env that meant the cross-run cap was simply OFF for the
+        # live demo - the one path that actually runs in front of people.
+        # source=None: falls back to PROBE_LLM_SOURCE if fake/replay.
+        llm = LLMClient(out_dir, mode=MODE, ledger_path=default_ledger_path(MODE))
         # browser=None: run_test() launches and closes its own here, in this plain thread (see the
         # module docstring for why it cannot be a single browser shared from the async lifespan).
         result = run_test(url, run_profile(), llm, out_dir, on_event=on_event, reset_path=reset_path)

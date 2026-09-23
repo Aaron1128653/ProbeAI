@@ -160,6 +160,60 @@ def test_a_multiline_exception_only_shows_its_first_line_to_the_page(monkeypatch
     assert "Call log" not in seen[-1]["message"]
 
 
+# ---- T12: the live UI is a spend-capable entry point and must share the cross-run ledger -------
+# It was the only one not wired through default_ledger_path(): the three CLIs were done in T7-0c,
+# and with PROBE_SPEND_LEDGER empty in .env that left the cumulative cap OFF for the one path that
+# actually runs in front of people.
+
+def ledger_path_the_web_path_would_use(monkeypatch, mode):
+    """Drive _run_in_background far enough to capture what it hands LLMClient, without running a
+    real agent: run_test is stubbed out, so only the client construction matters."""
+    seen = {}
+
+    def capture(out_dir, mode=None, ledger_path=None, **kwargs):
+        seen["ledger_path"] = ledger_path
+        return StubLLMClient()
+    monkeypatch.setattr(server, "MODE", mode)
+    # satisfy the startup gate for the mode under test - it is not what is being checked here, and
+    # it is correct to refuse real/record without these (see the validate_startup tests above)
+    monkeypatch.setattr(server, "YES_SPEND", mode in ("real", "record"))
+    monkeypatch.setattr(server, "REPLAY_URL", "http://x/" if mode == "replay" else None)
+    monkeypatch.setattr(server, "LLMClient", capture)
+    monkeypatch.setattr(server, "run_test", fake_run_test(
+        [], result=result_of(missions=[{"id": "m1", "goal": "g", "status": "done", "steps": 0}])))
+    with TestClient(server.app) as client:
+        start_and_drain(client)
+    return seen["ledger_path"]
+
+
+@pytest.mark.parametrize("mode", ["real", "record"])
+def test_the_web_path_gets_the_default_ledger_when_it_can_spend(mode, monkeypatch):
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+    assert ledger_path_the_web_path_would_use(monkeypatch, mode) == "runs/spend_ledger.jsonl"
+
+
+@pytest.mark.parametrize("mode", ["fake", "replay"])
+def test_the_web_path_gets_no_ledger_when_it_cannot_spend(mode, monkeypatch):
+    monkeypatch.delenv("PROBE_SPEND_LEDGER", raising=False)
+    assert ledger_path_the_web_path_would_use(monkeypatch, mode) is None
+
+
+def test_an_explicit_spend_ledger_env_value_still_wins_on_the_web_path(monkeypatch):
+    monkeypatch.setenv("PROBE_SPEND_LEDGER", "custom/ledger.jsonl")
+    assert ledger_path_the_web_path_would_use(monkeypatch, "record") == "custom/ledger.jsonl"
+
+
+def test_every_spend_capable_entry_point_uses_the_same_ledger_convention():
+    """The invariant that was actually violated: three entry points wired it, one did not, and the
+    one that did not is the demo. Reads the source so a new entry point cannot quietly skip it."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for name in ("probe/agent.py", "probe/evaluate.py", "probe/check_disprove.py", "web/server.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        assert "ledger_path=" in source, f"{name} constructs an LLMClient without wiring a ledger"
+        assert "default_ledger_path" in source, f"{name} does not use the shared ledger convention"
+
+
 def test_status_remembers_the_last_run_after_it_finishes(monkeypatch):
     events = [{"type": "run_finished", "t": 1.0, "report": {"counts": {}, "timed_out": False}}]
     finding = {"id": "C1", "tier": "Confirmed", "title": "Delete fails"}
