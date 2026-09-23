@@ -13,8 +13,8 @@ import anthropic
 import pytest
 
 from conftest import make_entry, make_state
-from probe.llm import (DEFAULT_MAX_COST_USD, DEFAULT_MODELS, DEFAULT_TOTAL_BUDGET_USD, MODES,
-                       LLMClient, LLMError, load_dotenv, validate_decision)
+from probe.llm import (DEFAULT_MAX_COST_USD, DEFAULT_MODELS, DEFAULT_TOTAL_BUDGET_USD, MAX_TOKENS,
+                       MODES, NO_THINKING, LLMClient, LLMError, load_dotenv, validate_decision)
 from probe.schemas import (AppPlan, Disproof, JudgedFinding, Judgement, Mission, StepDecision,
                            StepVerdict)
 
@@ -115,10 +115,20 @@ def test_each_role_gets_its_model_token_limit_and_thinking_setting(tmp_path):
     by_role = dict(zip(("plan", "step", "judge", "disprove"), sdk.calls))
     assert {r: c["model"] for r, c in by_role.items()} == {
         "plan": "claude-sonnet-5", "step": "claude-haiku-4-5", "judge": "claude-sonnet-5", "disprove": "claude-sonnet-5"}
-    assert {r: c["max_tokens"] for r, c in by_role.items()} == {"plan": 1500, "step": 400, "judge": 1500, "disprove": 300}
+    assert {r: c["max_tokens"] for r, c in by_role.items()} == {"plan": 1500, "step": 400, "judge": 1500, "disprove": 1500}
     assert {r: c.get("thinking") for r, c in by_role.items()} == {
         "plan": None, "step": {"type": "disabled"}, "judge": {"type": "disabled"}, "disprove": None}
     assert all(c["output_format"] is SCHEMA_FOR_ROLE[r] for r, c in by_role.items())
+
+
+def test_every_thinking_enabled_role_has_room_for_thinking_plus_an_answer():
+    """T9-a: the invariant that was actually violated. disprove ran with thinking ENABLED (it is
+    not in NO_THINKING) on a 300-token budget - and thinking tokens count against max_tokens, so
+    the budget was gone before the answer was emitted. It went unseen because no real disprove
+    call had ever been made; the first one, on 2026-09-23, failed and aborted a paid 7-run batch."""
+    for role, limit in MAX_TOKENS.items():
+        if role not in NO_THINKING:
+            assert limit >= 1500, f"{role} thinks but only has {limit} tokens for thinking AND the answer"
 
 
 def test_models_come_from_environment_variables_and_an_empty_one_means_the_default(tmp_path, monkeypatch):

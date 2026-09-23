@@ -40,8 +40,18 @@ Newest day first. Updated after every finished task (see CLAUDE.md working rules
 - Batch spend $0.581814 against the $2.10 approved ceiling, measured from the ledger before and after ($0.866075 → $1.447889).
 - Demo server started and stopped by PID on port 8765, never a broad `taskkill`.
 
+- **T9-a done (zero cost): the disprove pass is now configured to work, and survivable when it doesn't.** Two separate fixes for the two separate problems the N=3 run exposed:
+  - *The cause*: `MAX_TOKENS["disprove"]` 300 -> 1500 in `probe/llm.py`, with the reasoning written into the code where the next reader will hit it. Thinking deliberately stays **enabled** for disprove - it was switched off for `step`/`judge` to protect latency on per-step calls, but disprove runs a handful of times per mission and arguing a benign explanation is the one call whose entire job is reasoning (D12 addendum).
+  - *The blast radius*: `build_mission_items` now catches `LLMError` around the disprove call, leaves `disproof_survived` unset (exactly the existing deadline-skip path), and records the reason on the item as `disprove_error` plus a note appended to `reason` - visible, not swallowed. Safe by D3's own rule: without a disprove pass a candidate cannot reach Confirmed, so this can only under-claim, never over-claim.
+  - New test `test_every_thinking_enabled_role_has_room_for_thinking_plus_an_answer` states the invariant that was actually violated (a thinking-enabled role needs room for thinking *and* an answer), so this class of misconfiguration cannot come back for `plan` either.
+
+**Evidence**
+- `pytest -q` -> **`289 passed`** (287 + 2 new).
+- Mutation checks, both caught: the degrade handler changed to `raise` - the new test failed with the real `LLMError: fake mode has no answer left for role 'disprove'` propagating out, i.e. the exact 2026-09-23 failure reproduced; and `MAX_TOKENS["disprove"]` put back to 300 - both the per-role config test and the new invariant test failed (`disprove thinks but only has 300 tokens for thinking AND the answer`). Restored, green again.
+- The degrade test uses a real `LLMError` from an empty fake script rather than a stub pretending to be one, so it exercises the genuine error path.
+
 **Next**
-- **T9-a (zero cost): make the disprove pass survivable** - raise its `max_tokens` to 1500 and make a failed disprove degrade to "no disprove" (leaving the candidate at Likely, which D3's own rule already makes safe) instead of aborting the run. Spec and acceptance in the D12 addendum.
+- **T9-b (~$0.08, needs a go): re-run the injection canary alone** (`--n 0`), since D7 point 4's check is verified as of 2026-09-22 but was not re-verified under T8-b - and the canary is also now the cheapest way to see a real disprove call actually complete, since that is the run that triggered one.
 - **T9-b (~$0.08, needs a go): re-run the injection canary alone** (`--n 0`), since D7 point 4's check is verified as of 2026-09-22 but was not re-verified under T8-b.
 - The two D12-deferred defects still stand, untouched: step-budget starvation (5/5 runs saturated 15/15 steps, last mission starved every time) and no path for the judge to retract a faulty expectation.
 - Third-party site: still last, still optional, still the user's call. Unchanged by any of this.

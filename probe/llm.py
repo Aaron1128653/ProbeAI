@@ -43,7 +43,14 @@ DEFAULT_MODELS = {
     "judge": "claude-sonnet-5",
     "disprove": "claude-sonnet-5",
 }
-MAX_TOKENS = {"plan": 1500, "step": 400, "judge": 1500, "disprove": 300}
+# disprove was 300 until 2026-09-23 (D8), which could never work: it is NOT in NO_THINKING, so it
+# runs with extended thinking, and thinking tokens count against max_tokens - the budget was spent
+# thinking before the answer was emitted. It went unnoticed because no real disprove call had ever
+# been made (zero in the whole 2026-09-22 batch); the first one, on 2026-09-23, failed instantly
+# and aborted a paid 7-run batch. Raised to match judge rather than switching thinking off:
+# disprove runs a few times per mission, not per step, and arguing a benign explanation is the one
+# call whose whole job is reasoning (D12 addendum).
+MAX_TOKENS = {"plan": 1500, "step": 400, "judge": 1500, "disprove": 1500}
 NO_THINKING = ("step", "judge")  # these calls must be fast, so thinking is switched off
 
 # USD per million tokens (input, output). Prices change: check the console for current prices.

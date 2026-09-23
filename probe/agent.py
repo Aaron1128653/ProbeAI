@@ -367,6 +367,7 @@ def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, m
             finding_by_step.setdefault(f.step, f)  # first finding per step wins
 
     disproof_survived: dict[str, bool] = {}
+    disprove_failed: dict[str, str] = {}  # candidate id -> why its disprove call could not be used
     for c in candidates:
         finding = finding_by_step.get(c.step)
         if finding is not None and finding.kind == "improvement":
@@ -378,7 +379,16 @@ def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, m
         if deadline is not None and time.monotonic() >= deadline:
             continue  # out of time: leave it at Likely rather than spend more verifying it
         if c.replays and all(s.reproduced_n == c.replays for s in c.signals):
-            answer, usage = llm.call("disprove", SYSTEM["disprove"], disprove_prompt(mission, c), Disproof)
+            try:
+                answer, usage = llm.call("disprove", SYSTEM["disprove"], disprove_prompt(mission, c), Disproof)
+            except LLMError as exc:
+                # T9-a: one unusable disprove answer must not end the run. On 2026-09-23 it did -
+                # an answer cut off by max_tokens aborted a paid 7-run batch on its last run, and
+                # on stage it would end a live demo mid-run. Degrading is safe by D3's own rule:
+                # leaving disproof_survived unset is exactly the deadline-skip path above, and it
+                # can only leave the candidate at Likely, never wrongly promote it to Confirmed.
+                disprove_failed[c.id] = str(exc).splitlines()[0]
+                continue
             meter.record(usage)
             disproof_survived[c.id] = not answer.refuted
 
@@ -390,6 +400,9 @@ def build_mission_items(mission, mission_run: Run, candidates, judgement, llm, m
             continue
         d = candidate_dict(c, verdict_by_step.get(c.step), disproof_survived.get(c.id))
         d["mission"] = mission.id
+        if c.id in disprove_failed:  # said out loud on the item, not swallowed
+            d["disprove_error"] = disprove_failed[c.id]
+            d["reason"] += f" (the disprove pass could not be used: {disprove_failed[c.id]})"
         if finding is not None:  # kind == "bug"
             d["title"], d["severity"] = finding.title, finding.severity
             d["impact"], d["expected"] = finding.impact, finding.expected

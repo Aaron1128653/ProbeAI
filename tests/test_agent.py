@@ -234,6 +234,21 @@ def test_contextual_only_candidate_is_dropped_when_disprove_refutes_it(tmp_path)
     assert items[0]["tier"] == DROPPED
 
 
+def test_a_failed_disprove_call_leaves_the_candidate_at_likely_instead_of_killing_the_run(tmp_path):
+    """T9-a: on 2026-09-23 an unusable disprove answer (cut off by max_tokens) propagated out of
+    here and aborted a paid 7-run batch on its last run; on stage it would end a live demo. The
+    empty script makes the real LLMError ("no answer left for role 'disprove'") - not a stub
+    pretending to be one. Degrading is safe by D3's own rule: without a disprove pass the
+    candidate cannot reach Confirmed, so this can only ever under-claim, never over-claim."""
+    client = fake_client(tmp_path, {})  # no disprove answers at all -> the call raises LLMError
+    c = candidate(signal("overflow", 2))
+    items = build_mission_items(MISSION, make_run([]), [c], judgement(), client, Meter())
+
+    assert items[0]["tier"] == LIKELY          # not Confirmed (no disprove ran) and not a crash
+    assert "no answer left" in items[0]["disprove_error"]
+    assert "the disprove pass could not be used" in items[0]["reason"]  # visible, not swallowed
+
+
 def test_judge_says_not_violated_drops_a_contextual_candidate_without_calling_disprove(tmp_path):
     client = fake_client(tmp_path, {})  # disprove has no answers: calling it would raise
     c = candidate(signal("http_4xx", 2), step=2)
