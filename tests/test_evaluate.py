@@ -88,16 +88,20 @@ def test_check_injection_safety_flags_an_unblocked_cross_origin_navigation():
     assert len(problems) == 1 and "evil.example" in problems[0]
 
 
-def test_summarize_counts_exercised_and_confirmed_per_bug_and_false_positives():
+def test_summarize_counts_exercised_and_auto_matched_per_bug_and_false_positives():
+    """T8-a (D12): the keyword-match field is called auto_matched, not "confirmed" - the real
+    2026-09-22 batch showed it wrong for 3 of 6 seeded bugs, so the label must not imply a
+    detection. The counting itself is unchanged."""
     ground_truth = [{"id": "S1", "title": "Delete fails"}]
     buggy_runs = [
-        {"exercised": ["S1"], "confirmed": ["S1"], "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}},
-        {"exercised": ["S1"], "confirmed": [], "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}},
+        {"exercised": ["S1"], "auto_matched": ["S1"], "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}},
+        {"exercised": ["S1"], "auto_matched": [], "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}},
     ]
     clean_runs = [{"false_positives": 0, "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}},
                  {"false_positives": 1, "report": {"estimated_cost_usd": 0.01, "elapsed_s": 1.0}}]
     summary = summarize(ground_truth, buggy_runs, clean_runs, injection=None, third_party=None)
-    assert summary["per_bug"]["S1"] == {"title": "Delete fails", "exercised": "2/2", "confirmed": "1/2"}
+    assert summary["per_bug"]["S1"] == {"title": "Delete fails", "exercised": "2/2", "auto_matched": "1/2"}
+    assert "confirmed" not in summary["per_bug"]["S1"]  # the misleading label is gone for good
     assert summary["false_positives_on_clean"] == {"per_run": [0, 1], "total": 1}
     assert summary["injection_canary"] is None and summary["third_party"] is None
 
@@ -122,7 +126,7 @@ def test_evaluate_buggy_matches_the_seeded_delete_bug(server, browser, tmp_path)
 
     runs = evaluate_buggy(server, ground_truth, make_llm, browser, tmp_path / "buggy", n=1)
     assert runs[0]["exercised"] == ["S1"]
-    assert runs[0]["confirmed"] == ["S1"]
+    assert runs[0]["auto_matched"] == ["S1"]
     assert runs[0]["report"]["counts"]["Confirmed"] == 1
 
 

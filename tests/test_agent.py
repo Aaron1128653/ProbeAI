@@ -18,15 +18,16 @@ from pathlib import Path
 
 import pytest
 
-from conftest import fresh_app, http, load_steps, make_entry, make_run, make_state
-from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, LIKELY, AgentError, Meter, Profile,
-                         build_mission_items, build_report, check_spend_confirmed, decide,
-                         default_ledger_path, diff_lines, disprove_prompt, judge_prompt, main,
-                         plan_prompt, replay_mission, run_mission, run_test, sanitize_judgement,
-                         step_prompt)
+from conftest import (fresh_app, http, load_steps, make_entry, make_evidence, make_record,
+                      make_run, make_state)
+from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, JUDGE_STATE_PER_STEP, JUDGE_STATE_TOTAL,
+                         LIKELY, AgentError, Meter, Profile, build_mission_items, build_report,
+                         check_spend_confirmed, decide, default_ledger_path, diff_lines,
+                         disprove_prompt, judge_prompt, main, plan_prompt, replay_mission,
+                         run_mission, run_test, sanitize_judgement, step_prompt)
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS
-from probe.executor import Run, run_steps
+from probe.executor import Run, StepResult, run_steps
 from probe.findings import Candidate, classify
 from probe.llm import DEFAULT_MAX_COST_USD, LLMClient, LLMError
 from probe.oracles import Signal, signals_for_run
@@ -81,6 +82,55 @@ def test_judge_and_disprove_prompts_also_fence_page_derived_content():
     candidate = Candidate("C1", 1, signals, 2, 2, ['Click button "Go"'], "before.png", "after.png")
     dp = disprove_prompt(MISSION, candidate)
     assert "<<<PAGE" in dp and "PAGE>>>" in dp and "overflow" in dp
+
+
+# ---- T8-b / D12: the judge also sees the page as it ended up, not only what changed -----------
+# The real 2026-09-22 evaluation's S6 miss: a counter that fails to update leaves NO diff line,
+# so the changed-lines summary alone structurally cannot show "should have changed, didn't".
+
+def _run_with_snapshots(before: str, after: str, expect: str = "the count drops to 1") -> Run:
+    state_before = replace(make_state(), snapshot_plain=before)
+    state_after = replace(make_state(), snapshot_plain=after)
+    record = replace(make_record(action="check", name="Buy milk"), expect=expect)
+    result = StepResult(record, make_evidence(record), state_before, state_after)
+    return Run(url="http://app.test:8765/", started_at="", load={}, states=[state_before], results=[result])
+
+
+def test_judge_prompt_shows_a_value_that_should_have_changed_but_did_not():
+    """The S6 shape: 'items left' is byte-identical before and after (that IS the bug), so it can
+    never appear in the changed-lines diff. It must still reach the judge via the page state."""
+    before = '- checkbox "Buy milk"\n- text: Buy milk\n- paragraph: 2 items left'
+    after = '- checkbox "Buy milk" [checked]\n- text: Buy milk\n- paragraph: 2 items left'
+    prompt = judge_prompt(MISSION, _run_with_snapshots(before, after), signals=[])
+
+    changed_line = next(l for l in prompt.splitlines() if l.startswith("Step 1:"))
+    assert "2 items left" not in changed_line      # the blind spot is real: the diff cannot show it
+    assert "[checked]" in changed_line             # ... while a value that did change is shown
+    assert "Page after step 1:" in prompt
+    assert "2 items left" in prompt                # ... and the page state now carries it anyway
+
+
+def test_judge_prompt_caps_the_page_state_per_step_and_marks_the_truncation():
+    huge = "\n".join(f"- text: line {i}" for i in range(2000))  # far over the per-step cap
+    prompt = judge_prompt(MISSION, _run_with_snapshots("- text: line 0", huge), signals=[])
+    excerpt = prompt.split("Page after step 1:\n", 1)[1]
+    assert "[truncated," in excerpt                             # the judge is told it was cut
+    assert len(excerpt) < len(huge)
+    assert len(excerpt) <= JUDGE_STATE_PER_STEP + 200           # cap honoured, plus the marker
+
+
+def test_judge_prompt_stops_adding_page_state_once_the_mission_budget_is_used_up():
+    big = "\n".join(f"- text: line {i}" for i in range(500))
+    state_before = replace(make_state(), snapshot_plain="- text: start")
+    state_after = replace(make_state(), snapshot_plain=big)
+    record = replace(make_record(), expect="something")
+    results = [StepResult(record, make_evidence(record), state_before, state_after) for _ in range(8)]
+    run = Run(url="http://app.test:8765/", started_at="", load={}, states=[state_before], results=results)
+
+    prompt = judge_prompt(MISSION, run, signals=[])
+    assert "the page-state budget for this mission is used up" in prompt  # said out loud, not silent
+    page_state_chars = sum(len(p) for p in prompt.split("Page after step ")[1:])
+    assert page_state_chars < JUDGE_STATE_TOTAL * 2  # bounded no matter how many steps a mission has
 
 
 def test_diff_lines_shows_only_added_and_removed_lines_capped():

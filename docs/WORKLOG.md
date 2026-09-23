@@ -2,6 +2,39 @@
 
 Newest day first. Updated after every finished task (see CLAUDE.md working rules). `/wrapup` writes the final entry of a session.
 
+## 2026-09-23
+
+**Done**
+- **D12 failure attribution (Opus, zero API cost - read only the already-recorded runs, which store the full `system`+`user`+`answer` of every call).** It changed yesterday's conclusion in two places, which is exactly why it ran before any prompt was touched. Committed `5cb914d`.
+
+  | Bug | Category | Evidence |
+  |---|---|---|
+  | **S2** reopen a completed task | **(1) never proposed, 5/5** | No plan in any run proposes unticking/reopening; every `state_change` slot is "mark complete", which ticks once and never unticks |
+  | **S5** duplicate title | **(1) never proposed, 5/5** | Every `input_validation` slot is empty/whitespace input; "duplicate" appears in 0 of the 25 proposed missions |
+  | **S4** long-title overflow | **(2) proposed but never exercised, 1/5**; never proposed 4/5 | `buggy_1` m5 typed a 75-char emoji/special string, then ran out of run-wide budget *before clicking Add* - the string sat in the textbox, still only 2 `listitem`s, status `budget_exceeded`, so no overflow could render and the trigger correctly never fired |
+  | **S6** footer count | **(3) exercised but not recognised - evidence packaging, not judge quality** | below |
+  | clean_3 false positive | **step-agent state error -> faulty expectation -> judge honours it** | below |
+
+- **S6's cause, proven with a same-run control.** The judge is given only `diff_lines()` = `difflib.unified_diff(..., n=0)` filtered to `+`/`-` lines, so anything identical before and after is dropped *by construction*. `buggy_3`'s recorded judge prompt is the whole story: the model's own pre-registered expectation names the bug exactly - *"the item count should change from '2 items left' to '1 items left'"* - and the evidence handed back is `changed: - checkbox "Buy milk"; + checkbox "Buy milk" [checked]; signals: none`. The footer is absent **because it didn't change**. Control, same run family (`buggy_5`): on the *add-a-task* mission where the count really does go 2 -> 3, the footer line **is** present in the diff. Same element, visible when it works, invisible when it is broken. Several runs then honestly filed "cannot verify the count updated from the evidence" as an Improvement - the model correctly reporting an evidence gap we created.
+- **The clean-build false positive was not the mission's fault.** The *step agent* authored the false expectation at step 3 - *"...displaying no tasks in the list since all tasks are completed"*, reasoning *"'Buy milk' is the only task"* (there were two) - after generalising from a view it had just filtered to Completed. The judge then did exactly what D1/D3 tell it to: compare observed against the pre-registered expectation and report the contradiction. Its own `expected` text even contains the correct retraction (*"the app's own data shows 'Write report' was never marked completed, so it appearing under Active is correct behavior"*), but `StepVerdict.violated` is a bool and `JudgedFinding.kind` is bug|improvement, so it had no way to say "the expectation itself was invalid" and filed the bug anyway.
+- **Unasked-for finding that reframes plan diversity: the eval profile funds 3-4 of the 5 missions it asks for.** All five buggy runs consumed **exactly 15 of 15** run-wide steps; the last mission was starved in **5/5** (`budget_exceeded`, 1-4 steps), and missions 3 *and* 5 starved in `buggy_2` and `buggy_4`. `max_steps_per_mission=6` lets early missions eat the shared 15. So plan-diversity wording on its own would largely reshuffle *which* missions starve - diversity is gated on budget, and testing both together would confound both.
+- **T8-a done**: `probe/evaluate.py`'s automated keyword result renamed `confirmed` -> `auto_matched`, in the printed summary and `summary.json`. The printed block now states in full that it is a first pass, not a detection count, that the real batch had it wrong for 3 of 6 bugs, and that the numbers require hand adjudication. `exercised`, the matching logic and the false-positive counter are untouched; `check_spend_confirmed` (a different thing entirely) is untouched; `runs/eval_2026-09-22/summary.json` is deliberately left exactly as produced.
+- **T8-b done (the D12 experiment, single variable)**: `judge_prompt()` in `probe/agent.py` now adds, per step, a capped excerpt of that step's post-step `snapshot_plain` alongside the existing `changed:`/`signals:` line - `JUDGE_STATE_PER_STEP=1200` chars per step, `JUDGE_STATE_TOTAL=6000` across the mission, truncation marked explicitly (`... [truncated, N more characters]`), and an out-loud line when the mission budget is used up rather than silently omitting. `step_prompt()`, the five prompt texts in `docs/PROMPTS.md`/`probe/prompts.py`, the schemas, the tier rules and the profiles are all untouched.
+
+**Evidence**
+- `pytest -q` -> **`287 passed`** (284 + 3 new judge-prompt tests: the S6 shape, the per-step cap, the mission-wide budget).
+- Mutation check on T8-b (removed the page-state line, re-ran, restored): both new tests failed, and the failure output is itself the proof - the mutated prompt read `changed: -- checkbox "Buy milk"; +- checkbox "Buy milk" [checked]; signals: none`, i.e. exactly the blind spot the real run hit, with no count anywhere.
+- Baseline recordings still usable after the prompt change, verified for real rather than assumed: `PROBE_LLM_MODE=replay` on `runs/eval_2026-09-22/buggy_1/llm_record.jsonl` completed - 25 LLM calls, $0.00 (replay matches on role + call index, not prompt text).
+- Fake-mode CLI acceptance (`python -m probe.evaluate --n 1`): the printed table now reads `S1: exercised 1/1, auto-matched 1/1` under the new caveat block, and the written `summary.json` carries `auto_matched`; re-read of `runs/eval_2026-09-22/summary.json` confirms the baseline artifact still carries the original `confirmed` key, untouched.
+
+**Next**
+- **T8-d, the N=3 verification run - needs the user's explicit budget go-ahead, not started.** `PROBE_LLM_MODE=record --n 3` (7 runs: 3 buggy + 3 clean + 1 canary). Ceiling 7 x $0.30 = **$2.10**; realistic ~$0.55 at the measured ~$0.08/run. Falsifiable prediction to report against: **S6 recognised in >= 1 of 3 buggy runs**; if not, the problem is judge reasoning after all and the next experiment differs. Also a primary readout, not a footnote: whether the clean-build false-positive rate got worse than yesterday's 1-in-5, since a judge that sees more page state may also flag more. Hand-adjudicate as D4 requires - do not quote the auto-match.
+- Two real defects are recorded and deliberately **not** fixed, so neither is lost: the step-budget starvation above (the natural next decision, and a precondition for any plan-diversity experiment), and the missing path for the judge to retract a faulty pre-registered expectation (rarer, touches D8's contracts, and weakening D1's anti-hindsight device deserves its own decision).
+- Third-party site: still last, still optional, still the user's call. Unchanged by any of this.
+
+**Blockers / decisions needed**
+- Cumulative real spend unchanged at **$0.866075** - D12's attribution and all of T8-a/b/c were zero-cost by construction (recorded runs, fake mode, replay). $9.13 of the $10 self-imposed cap remains.
+
 ## 2026-09-22
 
 **Done**

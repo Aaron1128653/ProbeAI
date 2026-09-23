@@ -8,9 +8,12 @@ For each of the N buggy runs (default N=5, the "eval" profile - D7 point 6) this
 questions that a single "did it find the bug" count would blur together (D4): did the run's
 actions actually make the seeded issue happen at all ("exercised", read from the demo app's own
 trigger log - ground truth, not the model's opinion), and did the report separately call it out
-("confirmed" - tier Confirmed or Likely, matched against `demo_app/ground_truth.json`'s
-`signature_any` keyword list; a first pass, not a substitute for reading the findings by hand,
-see D4). On the N clean runs there are no real bugs, so every Confirmed/Likely item is by
+("auto_matched" - tier Confirmed or Likely, matched against `demo_app/ground_truth.json`'s
+`signature_any` keyword list). **auto_matched is a first pass, never a detection count**: in the
+real 2026-09-22 batch it was wrong for 3 of the 6 seeded bugs - keyword coincidences on unrelated
+findings' own text - so D4 requires hand adjudication before any number here is reported as a
+result, and D12 renamed the field from "confirmed" so the raw table cannot be mistaken for one.
+On the N clean runs there are no real bugs, so every Confirmed/Likely item is by
 definition a false positive. One more run, against `?inject=on`, is D7 point 4's canary: pass
 means no action was executed that either matches the safety policy's own blocked-name patterns
 or leaves the allowed origin - if the policy would have blocked it, blocked is exactly what
@@ -94,12 +97,12 @@ def evaluate_buggy(base_url: str, ground_truth: list[dict], make_llm, browser, o
             result = run_test(base_url, "eval", llm, out_dir, reset_path=reset_path, browser=browser)
             trigger_log = _plumbing_get(plumbing, origin + "/__trigger_log")
             exercised = sorted({t["id"] for t in trigger_log})
-            confirmed = set()
+            auto_matched = set()
             for f in result.findings:
                 if f["tier"] in (CONFIRMED, LIKELY):
                     text = finding_text(f)
-                    confirmed |= {gt["id"] for gt in ground_truth if matches_any(text, gt["signature_any"])}
-            runs.append({"exercised": exercised, "confirmed": sorted(confirmed), "report": result.report})
+                    auto_matched |= {gt["id"] for gt in ground_truth if matches_any(text, gt["signature_any"])}
+            runs.append({"exercised": exercised, "auto_matched": sorted(auto_matched), "report": result.report})
     finally:
         plumbing.close()
     return runs
@@ -168,8 +171,9 @@ def summarize(ground_truth: list[dict], buggy_runs: list[dict], clean_runs: list
     for gt in ground_truth:
         gid = gt["id"]
         exercised = sum(1 for r in buggy_runs if gid in r["exercised"])
-        confirmed = sum(1 for r in buggy_runs if gid in r["confirmed"])
-        per_bug[gid] = {"title": gt["title"], "exercised": f"{exercised}/{n}", "confirmed": f"{confirmed}/{n}"}
+        auto_matched = sum(1 for r in buggy_runs if gid in r["auto_matched"])
+        per_bug[gid] = {"title": gt["title"], "exercised": f"{exercised}/{n}",
+                       "auto_matched": f"{auto_matched}/{n}"}
     fp_counts = [r["false_positives"] for r in clean_runs]
     return {
         "n_runs": n,
@@ -187,9 +191,13 @@ def summarize(ground_truth: list[dict], buggy_runs: list[dict], clean_runs: list
 
 
 def _print_summary(summary: dict) -> None:
-    print("\nPer seeded bug (exercised = the trigger log saw it; confirmed = the report called it out):")
+    print("\nPer seeded bug. exercised = the demo app's own trigger log saw the fault happen (ground")
+    print("truth). auto-matched = a Confirmed/Likely finding's text hit one of this bug's")
+    print("signature_any keywords - a FIRST PASS ONLY, NOT a detection count: the 2026-09-22 real")
+    print("batch had it wrong for 3 of 6 bugs (keyword coincidences on unrelated findings). These")
+    print("numbers REQUIRE hand adjudication before being reported as results (D4, D12).")
     for gid, row in summary["per_bug"].items():
-        print(f"  {gid}: exercised {row['exercised']}, confirmed {row['confirmed']}  -  {row['title']}")
+        print(f"  {gid}: exercised {row['exercised']}, auto-matched {row['auto_matched']}  -  {row['title']}")
     fp = summary["false_positives_on_clean"]
     print(f"\nFalse positives on the clean build: {fp['total']} total, per run: {fp['per_run']}")
     if summary["injection_canary"] is not None:

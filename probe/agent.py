@@ -145,16 +145,47 @@ def step_prompt(mission, history: list[dict], state) -> str:
     return "\n".join(lines)
 
 
+JUDGE_STATE_PER_STEP = 1200   # characters of post-step page state shown for one step
+JUDGE_STATE_TOTAL = 6000      # characters of post-step page state shown across one mission
+
+
+def _capped(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters with an explicit marker, so the judge can tell it is
+    looking at part of a page rather than silently reasoning from a page it thinks is complete."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n... [truncated, {len(text) - limit} more characters]"
+
+
 def judge_prompt(mission, run: Run, signals) -> str:
+    """Each step shows both what CHANGED and the page as it actually ended up (D12).
+
+    The changed-lines diff alone cannot represent a value that should have changed and did not:
+    `diff_lines` is `unified_diff(..., n=0)` filtered to +/- lines, so anything identical before
+    and after is dropped by construction. The real 2026-09-22 evaluation showed exactly what that
+    costs - the model pre-registered "the item count should change from '2 items left' to '1 items
+    left'" and was then handed only the checkbox line, because the count failing to update left no
+    diff line at all. Same page element, visible when it works, invisible when it is broken. The
+    post-step state is capped per step and across the mission, because a third-party page can be
+    far larger than the demo app's (its snapshot is a few hundred characters; the stored cap is
+    20000), and an uncapped excerpt per step would dominate the prompt and its cost."""
     by_step: dict[int, list[str]] = {}
     for s in signals:
         by_step.setdefault(s.step, []).append(s.kind)
     body = [f"Mission: {mission.goal}", f"Category: {mission.category}", f"Priority: {mission.priority}", ""]
+    left = JUDGE_STATE_TOTAL
     for i, r in enumerate(run.results, start=1):
         changed = "; ".join(diff_lines(r.state_before.snapshot_plain, r.state_after.snapshot_plain)) or "(no visible change)"
         kinds = ", ".join(by_step.get(i, [])) or "none"
         body.append(f'Step {i}: {r.record.action} (expected: "{r.record.expect}") '
                    f"-> changed: {changed}; signals: {kinds}")
+        if left <= 0:
+            body.append(f"Page after step {i}: [omitted, the page-state budget for this mission is used up]")
+            continue
+        excerpt = _capped(r.state_after.snapshot_plain, min(JUDGE_STATE_PER_STEP, left))
+        left -= len(excerpt)
+        body.append(f"Page after step {i}:\n{excerpt}")
     return _wrap_page("\n".join(body))
 
 
