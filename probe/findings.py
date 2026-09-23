@@ -53,7 +53,8 @@ def classify_with_reason(candidate: Candidate, judge_violated: bool | None = Non
       is never demoted and needs no disprove pass.
     - Likely: everything else that came back at least once, labelled "flaky (k/n)" when it did not
       come back every time, or "not reproduced" when it never came back.
-    - Judge-only candidate (no signals): the same outcome came back -> Likely, otherwise Dropped (D3)."""
+    - Judge-only candidate (no signals): the same outcome came back -> Likely, otherwise Dropped (D3).
+      `judge_violated` does not apply here (D14) - see the comment in that branch."""
     replays = candidate.replays
     hard = [s for s in candidate.signals if s.strength == "hard"]
     contextual = [s for s in candidate.signals if s.strength == "contextual"]
@@ -62,9 +63,18 @@ def classify_with_reason(candidate: Candidate, judge_violated: bool | None = Non
         return replays > 0 and s.reproduced_n == replays
 
     if not candidate.signals:  # only the judge saw it; "reproduced" means the same visible outcome
+        # D14: judge_violated does NOT gate a judge-only candidate any more. For a signal-based
+        # candidate the oracle fired on that step's own action, so "was the expectation for this
+        # action violated" is on topic and a False is real information (it was right 32 times out
+        # of 32 in the recorded corpus - all of them a no_effect on a click that only focused a
+        # textbox). A judge-only finding exists only because the judge noticed something on the
+        # page, which may have nothing to do with the expectation: S6's expectation was "the
+        # checkbox becomes checked", that WAS met, so violated=False is correct - and the counter
+        # defect it separately reported is correct too. Gating one on the other is an invalid
+        # inference, and it was wrong 3 times out of 3. What remains is the evidence gate below:
+        # reproduced_by_outcome (D8 ruling 9), a deterministic replay the model cannot influence,
+        # and D7 point 3 still caps a judge-only finding at Likely.
         n = f"{candidate.reproduced_n}/{replays}"
-        if judge_violated is False:
-            return DROPPED, "the judge says the expectation was not violated"
         if candidate.reproduced_n == 0:
             return DROPPED, f"judge-only finding and the same outcome did not come back in the replays ({n})"
         if candidate.reproduced_n < replays:

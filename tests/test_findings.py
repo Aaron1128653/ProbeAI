@@ -63,7 +63,11 @@ def candidate(*signals: Signal, replays: int = 2, outcome_n: int = 0) -> Candida
     ("judge-only, same outcome in both replays", [], {"outcome_n": 2}, LIKELY),
     ("judge-only, same outcome in one of two replays", [], {"outcome_n": 1}, LIKELY),
     ("judge-only, outcome did not come back", [], {"outcome_n": 0}, DROPPED),
-    ("judge-only, judge says fine", [], {"outcome_n": 2, "judge_violated": False}, DROPPED),
+    # D14: judge_violated no longer gates a judge-only candidate. The expectation can be correctly
+    # met (violated=False) while the judge separately reports a real defect the expectation never
+    # covered - that is exactly S6. The evidence gate (outcome reproduction) still applies.
+    ("judge-only, judge says fine, outcome reproduced", [], {"outcome_n": 2, "judge_violated": False}, LIKELY),
+    ("judge-only, judge says fine, outcome did not come back", [], {"outcome_n": 0, "judge_violated": False}, DROPPED),
 ])
 def test_classify_follows_the_tier_rule(label, signals, judgement, expected):
     judgement = dict(judgement)
@@ -78,6 +82,24 @@ def test_a_hard_signal_reproduced_in_only_some_replays_is_likely_and_labelled_fl
     assert one_of_three[0] == LIKELY and one_of_three[1].startswith("flaky (1/3)")
     assert classify(candidate(signal("http_5xx", 3), replays=3)) == CONFIRMED  # n/n whatever n is
     assert classify(candidate(signal("http_5xx", 0), replays=0)) == LIKELY     # never replayed: cannot be Confirmed
+
+
+def test_a_judge_only_finding_survives_a_met_expectation_but_still_needs_the_replay():
+    """D14, the S6 shape. The step's expectation ("the checkbox becomes checked") was correctly
+    met, so judge_violated=False is right - and the counter defect the judge separately reported
+    is also right. The verdict is about the action; the finding is about something else on the
+    page. What still gates it is evidence, not opinion: the same visible outcome has to come back
+    in the replays, and D7 point 3 keeps a judge-only finding at Likely, never Confirmed."""
+    survives = classify_with_reason(candidate(outcome_n=2), judge_violated=False)
+    assert survives[0] == LIKELY and "came back in every replay" in survives[1]
+
+    # the evidence gate is what does the work now, so it must still be able to drop things
+    assert classify(candidate(outcome_n=0), judge_violated=False) == DROPPED
+    assert classify(candidate(outcome_n=0), judge_violated=True) == DROPPED
+
+    # and a SIGNAL-BASED contextual candidate is untouched by D14: the judge still demotes it,
+    # which is the 32-out-of-32 case in the recorded corpus
+    assert classify(candidate(signal("no_effect", 2)), judge_violated=False) == DROPPED
 
 
 def test_the_judge_and_the_disprove_pass_leave_their_reason_for_a_dropped_candidate():
