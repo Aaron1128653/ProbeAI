@@ -4,6 +4,8 @@ Newest day first. Updated after every finished task (see CLAUDE.md working rules
 
 ## 2026-09-24
 
+**IN PROGRESS (2026-09-24, after rehearsals 1-3): D16 decided by an Opus subagent (user: "use Opus to decide, if you agree, execute"); building T14.** The ChatGPT proposal (deterministic repeat guard from browser evidence, tier-sorted cards) was evaluated independently by Opus and agreed with, adjusted only to THREE post-fix rehearsals. Decision text: `docs/DECISIONS.md` D16 (exact names, thresholds, task list T14-a..d). Order of work, one commit each, WORKLOG updated after each: T14-a guard in `probe/agent.py` + tests + 8 mutation checks -> T14-b page log line + tier sort -> T14-c corpus audit test (must be exactly 13 fires / 0 clean) + replay of the 3 rehearsal recordings -> T14-d docs. **Do NOT run real rehearsals without a fresh explicit go from the user** (post-fix protocol is in D16; ledger 518 calls / $1.720377). If this note is still the newest thing here, the session was cut off: `git log --oneline -5` and `git status` show which T14 step was last committed; resume at the next one.
+
 **T13 (D15's status-line work): a, b and c DONE.** Resumed after the 2026-09-23 session ended with T13 half-built. Zero API cost throughout; `run_status`, tier rules, replay, disprove, planner, prompts and schemas are untouched.
 - **T13-a done** (`a016b73`): `run_mission` returns `stuck_reason` (`validation_failed` | `model_declared` | None), threaded into each mission summary as an additive key; `status` untouched.
 - **T13-b done** (`c7cb3cd`): the partial banner has one precise sentence for one shape, everything else keeps today's generic wording exactly.
