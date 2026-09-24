@@ -11,7 +11,7 @@ URL → missions → browser evidence → judge → replay → tiered report
 ```
 
 1. **Missions.** One model call turns the first page into a short plan: what kind of app this is, and 3–5 things a user would actually want to do.
-2. **Browser evidence.** For each mission the agent picks *one* action at a time from what is really on the page, and the browser records what happened — every request and status, console errors, before/after screenshots, page state. The model cannot write this part.
+2. **Browser evidence.** For each mission the agent picks *one* action at a time from what is really on the page, and the browser records what happened — every request and status, console errors, before/after screenshots, page state. The model cannot write this part. If the same action fails the same way twice (say, the same button answers with a server error), the browser's evidence ends that check - the model is not asked to retry a third time.
 3. **Judge.** A separate call reviews the whole mission against what the agent said it *expected* before acting.
 4. **Replay.** Anything suspicious is re-run from a clean start. If it doesn't happen again, it doesn't get called confirmed.
 5. **Report.** Findings are tiered by rule, not by the model's own confidence: **Confirmed / Likely / Improvement / Dropped.**
@@ -64,6 +64,7 @@ Reported numbers are **hand-checked**, not raw keyword matches. The automated ma
 ## Known limits (V1)
 
 - **Coverage before judgement.** Some faults are never explored — the run-wide step budget is consumed by the first few missions, so the last mission is routinely starved.
+- **The retry guard only covers hard, identical failures.** It stops repeated server errors and script errors on the same element; a model that keeps retrying something that silently does nothing is not stopped, deliberately (weaker evidence).
 - **Replay assumes the app can be reset.** The demo app exposes a reset endpoint; an arbitrary app with server-side state may not replay cleanly.
 - **Third-party sites are not yet exercised**, and two safety checks are deliberately gated on that: the origin check reads link targets but not form actions or script-driven navigation, and "did the same thing happen again" compares the whole page, which would drift on a page with a clock or a live counter.
 - **Only the demo app has been tested at length**, and its faults are known to the author. Generality is unproven.
