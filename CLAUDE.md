@@ -14,7 +14,7 @@ Mechanical-engineering PhD (AUT). Strong in Python/MATLAB, experimental design, 
 The user must be able to explain every line in Q&A, so: **Python end to end, few dependencies, no framework the user cannot explain, plain readable code.**
 
 ## Direction
-The source of truth is `docs/DECISIONS.md` (D1-D16; later entries amend earlier ones - see that file's header); evidence in `docs/RESEARCH.md`. One-line summary:
+The source of truth is `docs/DECISIONS.md` (D1-D17; later entries amend earlier ones - see that file's header; D17: feature freeze from 2026-09-24, reopen rules there); evidence in `docs/RESEARCH.md`. One-line summary:
 ProbeAI takes a staging URL -> LLM builds an app model and 3-5 missions -> executes atomic steps chosen by ARIA-snapshot ref -> deterministic oracles record evidence -> judge proposes findings -> verify by clean-context replay -> tiered report (Confirmed / Likely / Improvement).
 Stack: Python, playwright, anthropic SDK, FastAPI + one static HTML page, JSON files. No Stagehand, no React, no database.
 Core sentences: the AI decides what is worth testing; the browser provides the evidence; suspected failures are reproduced before being called confirmed.
