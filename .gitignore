@@ -13,3 +13,7 @@ node_modules/
 # reference material with personal / confidential info - never commit
 Mybackground/
 Project background/
+
+# deck build (DECK_PLAN 0c)
+deck/.venv-deck/
+deck/renders/
