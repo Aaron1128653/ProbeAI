@@ -315,12 +315,15 @@ def _scripted_partial_run(server, browser, steps):
     """Drives the real page through a fake-mode run whose only mission ends the way `steps` say.
     Zero API cost. Returns (visible status-line text, /api/status json)."""
     fresh_app(server)
-    delete_btn = ref_for(browser, server, "button", "Delete Buy milk")
+    refs = {"click": ref_for(browser, server, "button", "Delete Buy milk"),
+            # a DIFFERENT element: D16's repeat guard ends a mission when the same click fails the same
+            # way twice, so a script that wants two server failures without the guard needs two buttons
+            "click_other": ref_for(browser, server, "button", "Delete Write report")}
     plan = {"app_type": "task list", "capabilities": ["delete"],
             "missions": [{"id": "m1", "goal": "Delete an existing task", "category": "core_flow",
                           "priority": "critical", "why": "Users could not manage their list."}]}
     script = {"plan": [plan],
-              "step": [decision(a, delete_btn if a == "click" else None, expect="the task disappears")
+              "step": [decision("click" if a == "click_other" else a, refs.get(a), expect="the task disappears")
                        for a in steps],
               "judge": [{"step_verdicts": [], "findings": []}]}
     script_path = ROOT / "runs" / "_web_ui_partial_script.json"
@@ -345,8 +348,9 @@ def _scripted_partial_run(server, browser, steps):
 
 def test_rehearsal_1_shape_end_to_end_gets_the_specific_sentence_and_stays_partial(server, browser):
     """Zero-cost replay of rehearsal 1's shape through the real agent, server and page: the model
-    itself says "stuck" after two real 500s from the seeded delete bug."""
-    text, status = _scripted_partial_run(server, browser, ["click", "click", "stuck"])
+    itself says "stuck" after two real 500s from the seeded delete bug (on two different Delete
+    buttons since D16: the same button twice is now ended by the repeat guard, see T14-b)."""
+    text, status = _scripted_partial_run(server, browser, ["click", "click_other", "stuck"])
     assert text == SPECIFIC_WORDING
     assert status["last_run_status"] == "partial"           # not reclassified, not softened
     assert status["last_partial_reason"] == MODEL_STOPPED

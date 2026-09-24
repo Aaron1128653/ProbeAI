@@ -21,16 +21,17 @@ import pytest
 from conftest import (fresh_app, http, load_steps, make_entry, make_evidence, make_record,
                       make_run, make_state)
 from probe.agent import (CONFIRMED, DROPPED, IMPROVEMENT, JUDGE_STATE_PER_STEP, JUDGE_STATE_TOTAL,
-                         LIKELY, AgentError, Meter, Profile, build_mission_items, build_report,
+                         LIKELY, REPEAT_GUARD_OCCURRENCES, TERMINAL_REPEATED_HARD_SIGNAL, AgentError,
+                         Meter, Profile, build_mission_items, build_report,
                          check_spend_confirmed, decide, default_ledger_path, diff_lines,
                          disprove_prompt, judge_prompt, main, plan_prompt, replay_mission,
-                         run_mission, run_test, sanitize_judgement, step_prompt)
+                         repeated_hard_failure, run_mission, run_test, sanitize_judgement, step_prompt)
 from probe.browser import new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS
-from probe.executor import Run, StepResult, run_steps
+from probe.executor import Run, StepRecord, StepResult, run_steps
 from probe.findings import Candidate, classify
 from probe.llm import DEFAULT_MAX_COST_USD, LLMClient, LLMError
-from probe.oracles import Signal, signals_for_run
+from probe.oracles import HARD_KINDS, Signal, signals_for_run
 from probe.schemas import (AppPlan, Disproof, JudgedFinding, Judgement, Mission, StepDecision,
                            StepVerdict)
 from probe.state import capture_state
@@ -434,6 +435,89 @@ def _ref_for(browser, url: str, role: str, name: str, nth: int = 0) -> str:
         context.close()
 
 
+# ---- D16: repeated_hard_failure(), the pure function ----------------------------------------
+
+DELETE_500 = "DELETE /api/tasks/{id} 500"
+
+
+def _step(action="click", name="Delete Buy milk", role="button", nth=0, text=None, blocked=None, locator=True):
+    return StepRecord(action=action, ref="e1", locator={"role": role, "name": name, "nth": nth} if locator else None,
+                      text=text, expect="something", blocked=blocked)
+
+
+def _sig(kind="http_5xx", key=DELETE_500, step=1) -> Signal:
+    return Signal(kind, "hard" if kind in HARD_KINDS else "contextual", step, "detail", key)
+
+
+def test_repeat_guard_fires_when_the_same_click_hits_the_same_hard_signal_twice():
+    guard = repeated_hard_failure([(_step(), [_sig()]), (_step(), [_sig(step=2)])])
+    assert guard == {"first_step": 1, "repeat_step": 2, "action": "click",
+                     "target": {"role": "button", "name": "Delete Buy milk", "nth": 0}, "text": None,
+                     "signal_kind": "http_5xx", "signal_key": DELETE_500}
+
+
+def test_repeat_guard_is_not_fooled_by_an_unrelated_step_in_between():
+    """Not required to be consecutive: the earlier occurrence is found anywhere in the mission."""
+    steps = [(_step(), [_sig()]), (_step("click", "Add"), []), (_step(), [_sig(step=3)])]
+    guard = repeated_hard_failure(steps)
+    assert guard["first_step"] == 1 and guard["repeat_step"] == 3
+
+
+def test_repeat_guard_needs_the_occurrence_threshold_and_that_threshold_is_two():
+    assert REPEAT_GUARD_OCCURRENCES == 2  # D16: the first failure counts, so the model gets exactly one retry
+    assert TERMINAL_REPEATED_HARD_SIGNAL == "repeated_hard_signal"
+    assert repeated_hard_failure([]) is None
+    assert repeated_hard_failure([(_step(), [_sig()])]) is None  # a single failure never fires
+
+
+def test_repeat_guard_does_not_merge_different_targets():
+    """Delete Buy milk then Delete Write report is the model exploring, not repeating."""
+    steps = [(_step(name="Delete Buy milk"), [_sig()]), (_step(name="Delete Write report"), [_sig(step=2)])]
+    assert repeated_hard_failure(steps) is None
+    same_name_other_nth = [(_step(nth=0), [_sig()]), (_step(nth=1), [_sig(step=2)])]
+    assert repeated_hard_failure(same_name_other_nth) is None
+    other_action = [(_step("click"), [_sig()]), (_step("check"), [_sig(step=2)])]
+    assert repeated_hard_failure(other_action) is None
+
+
+def test_repeat_guard_does_not_merge_different_hard_signals():
+    key_500, key_503 = DELETE_500, "DELETE /api/tasks/{id} 503"
+    assert repeated_hard_failure([(_step(), [_sig(key=key_500)]), (_step(), [_sig(key=key_503, step=2)])]) is None
+    kinds = [(_step(), [_sig("http_5xx")]), (_step(), [_sig("request_failed", step=2)])]
+    assert repeated_hard_failure(kinds) is None  # request_failed and http_5xx are different kinds
+    # the failure on the first step and nothing on the second is one occurrence, not two
+    assert repeated_hard_failure([(_step(), [_sig()]), (_step(), [])]) is None
+
+
+@pytest.mark.parametrize("kind", ["no_effect", "http_4xx", "overflow", "console_error", "state_not_reached"])
+def test_repeat_guard_ignores_contextual_signals_however_often_they_repeat(kind):
+    """A repeated contextual signal is not strong enough evidence to end a mission on (D16 rule 4)."""
+    steps = [(_step(), [_sig(kind, key="k")]), (_step(), [_sig(kind, key="k", step=2)]),
+             (_step(), [_sig(kind, key="k", step=3)])]
+    assert repeated_hard_failure(steps) is None
+
+
+def test_repeat_guard_counts_typed_text_as_part_of_the_action():
+    a = _step("type", "New task", "textbox", text="Buy bread")
+    b = _step("type", "New task", "textbox", text="Something else")
+    assert repeated_hard_failure([(a, [_sig("page_error", "boom")]), (b, [_sig("page_error", "boom", 2)])]) is None
+    same = _step("type", "New task", "textbox", text="Buy   bread")  # whitespace is squeezed
+    assert repeated_hard_failure([(a, [_sig("page_error", "boom")]), (same, [_sig("page_error", "boom", 2)])])
+
+
+def test_repeat_guard_never_counts_blocked_or_targetless_steps():
+    blocked = _step(blocked="matches the delete-account policy")
+    assert repeated_hard_failure([(blocked, [_sig()]), (blocked, [_sig(step=2)])]) is None
+    nowhere = _step(locator=False)
+    assert repeated_hard_failure([(nowhere, [_sig()]), (nowhere, [_sig(step=2)])]) is None
+
+
+def test_repeat_guard_reports_the_first_shared_pair_in_sorted_order():
+    both = [_sig("page_error", "TypeError boom"), _sig("http_5xx", DELETE_500)]
+    guard = repeated_hard_failure([(_step(), both), (_step(), list(reversed(both)))])
+    assert guard["signal_kind"] == "http_5xx" and guard["signal_key"] == DELETE_500  # 'http_5xx' < 'page_error'
+
+
 # ---- run_mission(): one mission, decided step by step against the real app ------------------
 
 def test_run_mission_does_a_sensible_two_step_mission_and_ends_done(server, browser, tmp_path):
@@ -446,9 +530,9 @@ def test_run_mission_does_a_sensible_two_step_mission_and_ends_done(server, brow
         decision("done", None, expect="").model_dump(),
     ]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason, guard = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
-    assert status == "done" and stuck_reason is None
+    assert status == "done" and stuck_reason is None and guard is None
     assert len(mission_run.results) == 2  # "done" itself takes no step
     assert signals == []  # adding a normal task raises no signal
 
@@ -462,7 +546,7 @@ def test_run_mission_recovers_from_one_invalid_ref_via_retry(server, browser, tm
         decision("done", None, expect="").model_dump(),
     ]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason, guard = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "done"
     assert len(mission_run.results) == 1  # the invalid attempt spent no step budget
@@ -472,7 +556,7 @@ def test_run_mission_ends_stuck_when_the_retry_also_fails(server, browser, tmp_p
     fresh_app(server)
     script = {"step": [decision("click", "e999").model_dump(), decision("click", "e998").model_dump()]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason, guard = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "stuck" and mission_run.results == [] and signals == []
     assert stuck_reason == "validation_failed"  # D15: two invalid answers in a row - code-verified, not opinion
@@ -485,17 +569,17 @@ def test_run_mission_records_a_model_declared_stuck_separately_from_a_validation
     fresh_app(server)
     script = {"step": [decision("stuck", None, expect="I cannot proceed").model_dump()]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status, stuck_reason = run_mission(
+    mission_run, signals, status, stuck_reason, guard = run_mission(
         browser, server, "/__reset", MISSION, client, 6, time.monotonic() + 30, tmp_path / "m",
         DEFAULT_IGNORE_PATHS, Meter())
-    assert status == "stuck" and stuck_reason == "model_declared"
+    assert status == "stuck" and stuck_reason == "model_declared" and guard is None
     assert mission_run.results == [] and signals == []
 
 
 def test_run_mission_times_out_before_taking_any_step(server, browser, tmp_path):
     fresh_app(server)
     client = fake_client(tmp_path, {})  # no answers needed: the deadline is already past
-    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason, guard = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() - 1, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "timed_out" and mission_run.results == []
     assert stuck_reason is None  # a timeout is not a kind of "stuck"
@@ -506,10 +590,69 @@ def test_run_mission_stops_at_the_step_budget(server, browser, tmp_path):
     box = _ref_for(browser, server, "checkbox", "Write report")
     script = {"step": [decision("check", box, expect="it becomes ticked").model_dump()]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 1,
+    mission_run, signals, status, stuck_reason, guard = run_mission(browser, server, "/__reset", MISSION, client, 1,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "budget_exceeded" and len(mission_run.results) == 1
-    assert stuck_reason is None
+    assert stuck_reason is None and guard is None
+
+
+def test_run_mission_ends_done_when_the_same_delete_fails_twice_with_the_same_500(server, browser, tmp_path):
+    """The three real rehearsals' shape (D16). The script holds exactly the two calls that will be
+    made: a third decide() would raise on the exhausted fake script, so this also proves the guard
+    stopped the step calls rather than merely ignoring what came next."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    script = {"step": [decision("click", ref, expect="the task Buy milk disappears").model_dump(),
+                       decision("click", ref, expect="the task Buy milk disappears").model_dump()]}
+    client = fake_client(tmp_path, script)
+    mission_run, signals, status, stuck_reason, guard = run_mission(
+        browser, server, "/__reset", MISSION, client, 6, time.monotonic() + 30, tmp_path / "m",
+        DEFAULT_IGNORE_PATHS, Meter())
+    assert status == "done" and stuck_reason is None
+    assert len(mission_run.results) == 2
+    assert guard["first_step"] == 1 and guard["repeat_step"] == 2
+    assert guard["signal_kind"] == "http_5xx" and guard["signal_key"] == DELETE_500
+    assert [s.kind for s in signals] == ["http_5xx", "http_5xx"]  # both failures stay in the evidence
+
+
+def test_the_repeat_guard_beats_the_step_budget_on_the_last_budgeted_step(server, browser, tmp_path):
+    """Budget 2, second failing click is the last allowed step: the loop's own budget test would call
+    this "budget_exceeded" (a partial run). The guard is checked first, so it ends as done."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    script = {"step": [decision("click", ref, expect="the task disappears").model_dump()] * 2}
+    client = fake_client(tmp_path, script)
+    _run, _signals, status, _reason, guard = run_mission(
+        browser, server, "/__reset", MISSION, client, 2, time.monotonic() + 30, tmp_path / "m",
+        DEFAULT_IGNORE_PATHS, Meter())
+    assert status == "done" and guard is not None
+
+
+def test_run_mission_does_not_stop_when_two_different_delete_buttons_fail(server, browser, tmp_path):
+    fresh_app(server)
+    milk = _ref_for(browser, server, "button", "Delete Buy milk")
+    report = _ref_for(browser, server, "button", "Delete Write report")
+    script = {"step": [decision("click", milk, expect="the task disappears").model_dump(),
+                       decision("click", report, expect="the task disappears").model_dump(),
+                       decision("stuck", None, expect="").model_dump()]}
+    client = fake_client(tmp_path, script)
+    mission_run, signals, status, stuck_reason, guard = run_mission(
+        browser, server, "/__reset", MISSION, client, 6, time.monotonic() + 30, tmp_path / "m",
+        DEFAULT_IGNORE_PATHS, Meter())
+    assert guard is None and status == "stuck" and stuck_reason == "model_declared"
+    assert len(mission_run.results) == 2 and [s.kind for s in signals] == ["http_5xx", "http_5xx"]
+
+
+def test_run_mission_does_not_stop_on_a_single_failure_followed_by_done(server, browser, tmp_path):
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    script = {"step": [decision("click", ref, expect="the task disappears").model_dump(),
+                       decision("done", None, expect="").model_dump()]}
+    client = fake_client(tmp_path, script)
+    _run, signals, status, _reason, guard = run_mission(
+        browser, server, "/__reset", MISSION, client, 6, time.monotonic() + 30, tmp_path / "m",
+        DEFAULT_IGNORE_PATHS, Meter())
+    assert guard is None and status == "done" and len(signals) == 1
 
 
 # ---- replay_mission() + build_mission_items() against a real mission_run --------------------
@@ -616,6 +759,7 @@ def test_run_test_end_to_end_on_a_clean_build_finds_nothing(server, browser, tmp
     result = run_test(clean_url, "live", llm, tmp_path / "out", reset_path="/__reset", browser=browser)
     assert result.report["counts"] == {CONFIRMED: 0, LIKELY: 0, IMPROVEMENT: 0, DROPPED: 0}
     assert result.report["verdict"] == "no confirmed issues"
+    assert all(m["terminal_reason"] is None and m["repeat_guard"] is None for m in result.missions)  # D16: never on a clean build
 
 
 def test_run_test_trims_missions_to_the_profile_maximum(server, browser, tmp_path):
@@ -650,12 +794,13 @@ def test_run_test_records_server_failure_signals_per_mission(server, browser, tm
     that counted every signal passed the first version of this test, which is why m2 does this)."""
     fresh_app(server)
     ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    other = _ref_for(browser, server, "button", "Delete Write report")  # a different element: D16's guard must not fire
     field = _ref_for(browser, server, "textbox", "New task")
     m2 = Mission(id="m2", goal="Look around", category="core_flow", priority="low", why="w")
     script = {
         "plan": [_plan_with(MISSION, m2).model_dump()],
         "step": [decision("click", ref, expect="the task Buy milk disappears").model_dump(),
-                decision("click", ref, expect="the task Buy milk disappears").model_dump(),
+                decision("click", other, expect="the task Write report disappears").model_dump(),
                 decision("stuck", None, expect="").model_dump(),
                 decision("click", field, expect="the field is focused, nothing else changes").model_dump(),
                 decision("done", None, expect="").model_dump()],
@@ -669,10 +814,43 @@ def test_run_test_records_server_failure_signals_per_mission(server, browser, tm
     by_id = {m["id"]: m for m in result.missions}
     assert by_id["m1"]["status"] == "stuck" and by_id["m1"]["stuck_reason"] == "model_declared"
     assert by_id["m1"]["server_failure_signals"] == 2
+    assert by_id["m1"]["terminal_reason"] is None and by_id["m1"]["repeat_guard"] is None  # D16: two elements, no repeat
     assert by_id["m2"]["status"] == "done" and by_id["m2"]["server_failure_signals"] == 0
     # m2 really did record a (non-server) signal: it surfaces as one Dropped item, the judge having
     # said the step's expectation held - otherwise a count of 0 above would prove nothing
     assert result.report["counts"][DROPPED] == 1
+
+
+def test_run_test_ends_the_delete_mission_done_via_the_repeat_guard_and_still_confirms_the_bug(server, browser, tmp_path):
+    """D16 end to end, the rehearsal-1/3 shape minus the model's extra retries: two identical failing
+    deletes and NO `stuck` entry in the script. The mission finishes as done with an audit-visible
+    reason, the delete bug is still Confirmed by the clean-context replay (the guard promotes
+    nothing), and the same fields are in events.jsonl."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    script = {
+        "plan": [_plan_with(MISSION).model_dump()],
+        "step": [decision("click", ref, expect="the task Buy milk disappears").model_dump(),
+                 decision("click", ref, expect="the task Buy milk disappears").model_dump()],
+        "judge": [judgement(step_verdicts=[StepVerdict(step=1, violated=True, reason="task remains")],
+                            findings=[bug(1, title="Delete fails")]).model_dump()],
+        "disprove": [],
+    }
+    llm = LLMClient(tmp_path, mode="fake", source=script, env_file=None)
+    result = run_test(server, "live", llm, tmp_path / "out", reset_path="/__reset", browser=browser)
+
+    m1 = result.missions[0]
+    assert m1["status"] == "done" and m1["stuck_reason"] is None and m1["steps"] == 2
+    assert m1["terminal_reason"] == TERMINAL_REPEATED_HARD_SIGNAL
+    assert m1["repeat_guard"]["first_step"] == 1 and m1["repeat_guard"]["repeat_step"] == 2
+    assert m1["server_failure_signals"] == 2
+    assert result.report["counts"] == {CONFIRMED: 1, LIKELY: 0, IMPROVEMENT: 0, DROPPED: 0}
+    assert [f["title"] for f in result.findings] == ["Delete fails"]
+
+    events = [json.loads(l) for l in (tmp_path / "out" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    judged = next(e for e in events if e["type"] == "mission_judged")
+    assert judged["terminal_reason"] == TERMINAL_REPEATED_HARD_SIGNAL and judged["repeat_guard"] == m1["repeat_guard"]
+    assert judged["status"] == "done"
 
 
 # ================================================================================================

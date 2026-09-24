@@ -31,11 +31,11 @@ from playwright.sync_api import sync_playwright
 
 from probe.browser import launch_chromium, new_context
 from probe.evidence import DEFAULT_IGNORE_PATHS, EvidenceRecorder
-from probe.executor import Run, Step, StepResult, execute_step
+from probe.executor import Run, Step, StepRecord, StepResult, execute_step
 from probe.findings import (CONFIRMED, DROPPED, LIKELY, build_candidates, candidate_dict,
                             describe_step, judge_only_candidate)
 from probe.llm import ENV_FILE, DEFAULT_MAX_COST_USD, LLMClient, LLMError, load_dotenv, validate_decision
-from probe.oracles import detect_signals
+from probe.oracles import HARD_KINDS, detect_signals
 from probe.prompts import SYSTEM
 from probe.run_script import evidence_dict
 from probe.safety import SafetyPolicy
@@ -206,6 +206,64 @@ def disprove_prompt(mission, candidate) -> str:
     return _wrap_page("\n".join(lines))
 
 
+# ---- the repeat guard (D16) ------------------------------------------------------------------
+
+# The step prompt already tells the model: "If the previous action showed an error message or changed
+# nothing, do not repeat the same action more than once." The three real rehearsals (2026-09-23/24)
+# showed Haiku does not reliably obey it - it clicked the same failing Delete 3-4 times, and the
+# mission then ended `stuck` or ran the shared step budget dry. This enforces that existing rule from
+# the browser's own evidence instead of from the model's compliance: the second time the SAME action
+# on the SAME element hits the SAME hard signal, the mission's outcome has been observed and a third
+# identical attempt adds nothing. Only hard signals count (oracles.HARD_KINDS) - a repeated no_effect
+# or 4xx is not strong enough evidence to end a mission on. The model's word decides nothing here.
+REPEAT_GUARD_OCCURRENCES = 2  # the first failure counts, so the model gets exactly one retry
+TERMINAL_REPEATED_HARD_SIGNAL = "repeated_hard_signal"
+
+
+def _action_identity(record: StepRecord):
+    """What "the same action" means: kind of action, the element it targeted, and the text typed.
+    A step the safety policy blocked, or one with no target, did nothing and never counts."""
+    if record.blocked or record.locator is None:
+        return None
+    loc = record.locator
+    return (record.action, loc["role"], loc["name"], loc["nth"], " ".join((record.text or "").split()))
+
+
+def _hard_pairs(signals) -> set:
+    """(kind, key) of each hard signal. Signal.key is already normalised (ids -> {id}, numbers -> {n}),
+    so two 500s from the same endpoint match, while a 500 and a 503, or an http_5xx and a
+    request_failed, do not."""
+    return {(s.kind, s.key) for s in signals if s.kind in HARD_KINDS}
+
+
+def repeated_hard_failure(steps: list) -> dict | None:
+    """`steps` is this mission's executed steps so far, in order, as (StepRecord, [Signal]) pairs.
+    Returns the audit dict (rule 6 of D16) if the LAST step repeats an earlier one - same action
+    identity, sharing at least one hard (kind, key) - enough times to reach REPEAT_GUARD_OCCURRENCES,
+    else None. The earlier occurrence need not be the previous step: an unrelated click in between
+    cannot dodge the rule."""
+    if not steps:
+        return None
+    last_record, last_signals = steps[-1]
+    identity = _action_identity(last_record)
+    pairs = _hard_pairs(last_signals)
+    if identity is None or not pairs:
+        return None
+    matches = []  # (1-based step number, the hard pairs it shares with the last step)
+    for number, (record, signals) in enumerate(steps[:-1], start=1):
+        if _action_identity(record) == identity:
+            shared = pairs & _hard_pairs(signals)
+            if shared:
+                matches.append((number, shared))
+    if len(matches) + 1 < REPEAT_GUARD_OCCURRENCES:
+        return None
+    first_step, shared = matches[0]
+    kind, key = sorted(shared)[0]
+    return {"first_step": first_step, "repeat_step": len(steps), "action": last_record.action,
+            "target": dict(last_record.locator), "text": last_record.text,
+            "signal_kind": kind, "signal_key": key}
+
+
 # ---- deciding and taking one step ----------------------------------------------------------
 
 def decide(llm, mission, history: list[dict], state, meter: Meter):
@@ -228,8 +286,15 @@ def decide(llm, mission, history: list[dict], state, meter: Meter):
 def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: int, deadline: float,
                 out_dir, ignore_paths, meter: Meter):
     """Drive the browser for one mission, one LLM-chosen action at a time. Returns (Run, signals,
-    status, stuck_reason); status is one of done, stuck, timed_out, budget_exceeded. The Run is
-    built exactly like a scripted one (T2/T3), so it can be replayed, judged and reported the same way.
+    status, stuck_reason, repeat_guard); status is one of done, stuck, timed_out, budget_exceeded.
+    The Run is built exactly like a scripted one (T2/T3), so it can be replayed, judged and reported
+    the same way.
+
+    repeat_guard (D16) is None unless repeated_hard_failure() ended the mission: then status is
+    "done" (the prompt's own definition - the goal was tried and its outcome observed) and
+    repeat_guard says exactly which two steps triggered it. It is decided from browser evidence
+    only, never from what the model said, which is why - unlike a model-declared "stuck" (D15) -
+    it may count as a finished mission.
 
     stuck_reason (D15) distinguishes the two ways `status` becomes "stuck" - it does not change
     what "stuck" means to run_status (still an incomplete sweep either way; see D15's audit of
@@ -248,11 +313,13 @@ def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: i
     policy = SafetyPolicy(allowed_origin=base_url, max_steps=step_budget)
     status = "done"
     stuck_reason: str | None = None
+    repeat_guard: dict | None = None
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     load: dict = {}
     states: list = []
     results: list[StepResult] = []
     signals: list = []
+    step_log: list = []  # (StepRecord, [Signal]) per executed step, what repeated_hard_failure reads
     try:
         if reset_path:
             reset_app(context, base_url, reset_path)
@@ -295,13 +362,19 @@ def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: i
                            "changed": diff_lines(state.snapshot_plain, state_after.snapshot_plain),
                            "signals": [s.kind for s in step_signals]})
             state = state_after
+
+            step_log.append((record, step_signals))
+            repeat_guard = repeated_hard_failure(step_log)
+            if repeat_guard:
+                status = "done"  # break skips the while's else, so this also beats "budget_exceeded"
+                break
         else:
             status = "budget_exceeded"
     finally:
         context.close()
 
     run = Run(url=base_url, started_at=started_at, load=load, states=states, results=results)
-    return run, signals, status, stuck_reason
+    return run, signals, status, stuck_reason, repeat_guard
 
 
 # ---- judging and verifying one mission ------------------------------------------------------
@@ -561,7 +634,7 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
         mission_budget = min(profile.max_steps_per_mission, profile.max_total_steps - steps_used)
         emit("mission_started", mission=mission.model_dump())
 
-        mission_run, signals, status, stuck_reason = run_mission(
+        mission_run, signals, status, stuck_reason, repeat_guard = run_mission(
             browser, base_url, reset_path, mission, llm, mission_budget, deadline, mission_out,
             ignore_paths, meter)
         steps_used += len(mission_run.results)
@@ -595,8 +668,14 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
                                   # deterministic evidence already computed for this mission; lets the
                                   # status line say "server failures" only when the browser recorded them
                                   "server_failure_signals": sum(1 for s in signals
-                                                                if s.kind in ("http_5xx", "request_failed"))})
-        emit("mission_judged", mission=mission.id, status=status, findings=len(items))
+                                                                if s.kind in ("http_5xx", "request_failed")),
+                                  # D16: additive. Set only when the repeat guard (browser evidence,
+                                  # not the model) ended this mission; status is then "done".
+                                  "terminal_reason": TERMINAL_REPEATED_HARD_SIGNAL if repeat_guard else None,
+                                  "repeat_guard": repeat_guard})
+        emit("mission_judged", mission=mission.id, status=status, findings=len(items),
+             terminal_reason=TERMINAL_REPEATED_HARD_SIGNAL if repeat_guard else None,
+             repeat_guard=repeat_guard)
         for item in items:
             emit("finding", **item)
 
