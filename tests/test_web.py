@@ -326,3 +326,98 @@ def test_compute_run_status_directly():
 
     no_missions = result_of(missions=[], timed_out=True)
     assert server.compute_run_status(no_missions) == "partial"
+
+
+# ---- D15/T13-b: compute_partial_reason() - the precise status sentence's gate -----------------
+
+def _mission(status="done", stuck_reason=None, failures=0, mid="m1"):
+    return {"id": mid, "goal": "g", "status": status, "steps": 2,
+            "stuck_reason": stuck_reason, "server_failure_signals": failures}
+
+
+def test_partial_reason_is_set_only_for_model_declared_stops_with_repeated_server_failures():
+    """Rehearsal 1's shape: m3 ended by the model's own "stuck" after two recorded server failures,
+    the other missions finished. run_status stays "partial" (never softened); only the reason is set."""
+    rehearsal_1 = result_of([_mission("done", mid="m1"), _mission("done", mid="m2"),
+                             _mission("stuck", "model_declared", failures=2, mid="m3")])
+    assert server.compute_run_status(rehearsal_1) == "partial"
+    assert server.compute_partial_reason(rehearsal_1) == server.MODEL_STOPPED_AFTER_SERVER_FAILURES
+
+
+def test_partial_reason_is_none_for_a_completed_run():
+    assert server.compute_partial_reason(result_of([_mission("done", failures=5)])) is None
+
+
+def test_partial_reason_needs_at_least_two_server_failures():
+    """One failure is not "repeated", and zero means the sentence would name something the browser
+    never recorded - the model saying "stuck" alone does not tell us why it stopped."""
+    for failures in (0, 1):
+        r = result_of([_mission("stuck", "model_declared", failures=failures)])
+        assert server.compute_run_status(r) == "partial"
+        assert server.compute_partial_reason(r) is None, failures
+    r = result_of([_mission("stuck", "model_declared", failures=server.MIN_SERVER_FAILURES)])
+    assert server.compute_partial_reason(r) == server.MODEL_STOPPED_AFTER_SERVER_FAILURES
+
+
+def test_partial_reason_is_none_when_any_real_failure_is_mixed_in():
+    """A validation failure, a timeout or a budget stop anywhere in the run keeps today's generic
+    wording - the presence of any of those must not be softened by the specific sentence."""
+    declared = _mission("stuck", "model_declared", failures=3, mid="m1")
+    for other in (_mission("stuck", "validation_failed", failures=3, mid="m2"),
+                  _mission("budget_exceeded", None, failures=3, mid="m2"),
+                  _mission("stuck", None, failures=3, mid="m2")):  # a stuck that carries no reason
+        r = result_of([declared, other])
+        assert server.compute_run_status(r) == "partial"
+        assert server.compute_partial_reason(r) is None, other
+    timed_out = result_of([declared], timed_out=True)
+    assert server.compute_run_status(timed_out) == "partial"
+    assert server.compute_partial_reason(timed_out) is None
+
+
+def test_partial_reason_tolerates_a_mission_summary_without_the_new_keys():
+    """Older report/summary shapes have no server_failure_signals: that must read as 0, not crash."""
+    old = {"id": "m1", "goal": "g", "status": "stuck", "steps": 1, "stuck_reason": "model_declared"}
+    assert server.compute_partial_reason(result_of([old])) is None
+
+
+def _finish_with(monkeypatch, result):
+    events = [{"type": "run_started", "t": 0.0, "url": "http://x/", "profile": "live"},
+              {"type": "run_finished", "t": 1.0, "report": result.report}]
+    monkeypatch.setattr(server, "run_test", fake_run_test(events, result=result))
+
+
+def test_partial_reason_reaches_the_run_finished_event_and_api_status(monkeypatch):
+    result = result_of([_mission("done", mid="m1"), _mission("stuck", "model_declared", failures=2, mid="m2")])
+    _finish_with(monkeypatch, result)
+    with TestClient(server.app) as client:
+        _posted, events = start_and_drain(client)
+        finished = events[-1]
+        assert finished["run_status"] == "partial"  # unchanged by T13
+        assert finished["partial_reason"] == server.MODEL_STOPPED_AFTER_SERVER_FAILURES
+        status = client.get("/api/status").json()
+        assert status["last_run_status"] == "partial"
+        assert status["last_partial_reason"] == server.MODEL_STOPPED_AFTER_SERVER_FAILURES
+
+
+def test_partial_reason_is_null_on_the_wire_for_a_generic_partial_and_a_completed_run(monkeypatch):
+    with TestClient(server.app) as client:
+        _finish_with(monkeypatch, result_of([_mission("stuck", "validation_failed", failures=4)]))
+        _posted, events = start_and_drain(client)
+        assert events[-1]["run_status"] == "partial" and events[-1]["partial_reason"] is None
+        assert client.get("/api/status").json()["last_partial_reason"] is None
+
+        _finish_with(monkeypatch, result_of([_mission("done", failures=4)]))
+        _posted, events = start_and_drain(client)
+        assert events[-1]["run_status"] == "completed" and events[-1]["partial_reason"] is None
+
+
+def test_partial_reason_is_cleared_when_the_next_run_starts_and_when_a_run_fails(monkeypatch):
+    with TestClient(server.app) as client:
+        _finish_with(monkeypatch, result_of([_mission("stuck", "model_declared", failures=2)]))
+        start_and_drain(client)
+        assert client.get("/api/status").json()["last_partial_reason"] is not None
+
+        monkeypatch.setattr(server, "run_test", fake_run_test([], error=RuntimeError("boom")))
+        _posted, events = start_and_drain(client)
+        assert events[-1]["run_status"] == "failed"
+        assert client.get("/api/status").json()["last_partial_reason"] is None

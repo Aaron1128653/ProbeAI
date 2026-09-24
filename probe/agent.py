@@ -591,7 +591,11 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
         all_findings += items
         mission_summaries.append({"id": mission.id, "goal": mission.goal, "status": status,
                                   "steps": len(mission_run.results),
-                                  "stuck_reason": stuck_reason})  # D15: additive, None unless stuck
+                                  "stuck_reason": stuck_reason,  # D15: additive, None unless stuck
+                                  # deterministic evidence already computed for this mission; lets the
+                                  # status line say "server failures" only when the browser recorded them
+                                  "server_failure_signals": sum(1 for s in signals
+                                                                if s.kind in ("http_5xx", "request_failed"))})
         emit("mission_judged", mission=mission.id, status=status, findings=len(items))
         for item in items:
             emit("finding", **item)

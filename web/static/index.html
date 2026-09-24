@@ -163,12 +163,22 @@ function plainTextFor(event) {
 // ---- run_status: rendered separately from, and at least as prominent as, the verdict ----------
 // (amendment point 1/2: a partial or failed run must never read as a clean pass)
 
-function renderStatusLine(runStatus, message) {
+// partialReason (D15): a precise sentence for ONE shape only - the server sends this value when every
+// unfinished check ended because the model itself said "stuck" AND the browser recorded repeated server
+// failures for it. It is never guessed here; anything else (null) gets the generic sentence. The
+// wording states what happened and that the sweep did not finish. It deliberately does not say the
+// stop was correct, justified or efficient: whether it was is not something the page gets to decide.
+const MODEL_STOPPED_AFTER_SERVER_FAILURES = "model_stopped_after_server_failures";
+
+function renderStatusLine(runStatus, message, partialReason) {
   const el = $("statusLine");
   if (runStatus === "completed" || !runStatus) { el.hidden = true; return; }
   el.hidden = false;
   el.className = "status-line " + runStatus;
-  if (runStatus === "partial") {
+  if (runStatus === "partial" && partialReason === MODEL_STOPPED_AFTER_SERVER_FAILURES) {
+    el.innerHTML = "⚠ One check stopped after repeated server failures. " +
+      '<span class="detail">The findings below are still valid, but the full sweep did not complete.</span>';
+  } else if (runStatus === "partial") {
     el.innerHTML = "⚠ This scan did not finish. " +
       '<span class="detail">The findings below are real, but absence of a Confirmed issue does not mean the app passed — the sweep was cut short.</span>';
   } else if (runStatus === "failed") {
@@ -267,7 +277,7 @@ function attachStream(runId) {
     if (text) logLine(text, event.t);
     if (event.type === "finding") handleFinding(event);
     if (event.type === "run_finished") {
-      renderStatusLine(event.run_status, null);
+      renderStatusLine(event.run_status, null, event.partial_reason);
       if (event.run_status !== "failed") renderReport(event.report);
       setRunning(false);
       es.close();
@@ -320,7 +330,7 @@ async function loadStatus() {
     attachStream(status.run_id);
   } else if (status.last_report) {
     currentRunId = status.run_id;
-    renderStatusLine(status.last_run_status, null);
+    renderStatusLine(status.last_run_status, null, status.last_partial_reason);
     if (status.last_run_status !== "failed") {
       renderReport(status.last_report);
       renderFindings(status.last_findings);

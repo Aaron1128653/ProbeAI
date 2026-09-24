@@ -107,6 +107,40 @@ def validate_startup(mode: str | None, yes_spend: bool, replay_url: str | None) 
     return None
 
 
+MODEL_STOPPED_AFTER_SERVER_FAILURES = "model_stopped_after_server_failures"
+MIN_SERVER_FAILURES = 2  # "repeated" means at least this many recorded http_5xx / request_failed signals
+
+
+def compute_partial_reason(result: RunResult) -> str | None:
+    """Why a `partial` run is partial, when - and only when - there is a specific, true thing to say
+    (D15). The status is NOT decided here: compute_run_status() still says partial for anything that
+    is not a fully completed sweep, and this never changes that. It only lets the page pick a more
+    precise sentence for one narrow shape, and returns None (today's generic wording) for every
+    other.
+
+    The shape: every mission that did not finish ended because the *model* chose action="stuck"
+    (not a validation failure, not a timeout, not budget exhaustion), and each of those missions
+    also recorded at least MIN_SERVER_FAILURES server-side failure signals from the browser. The
+    second condition is what keeps the sentence honest: the sentence says "server failures", but
+    "the model said stuck" alone does not tell us why it stopped, so without that evidence a
+    model-declared stop gets the generic wording, never a specific claim we cannot back up.
+
+    Deliberately not decided anywhere in here: whether the model's stop was right. D15 found the
+    formal action to be a vocabulary miscall (the prompt defines "stuck" as "cannot proceed" and
+    "done" as "outcome observed"), so the wording explains and does not vindicate."""
+    if result.timed_out:
+        return None
+    unfinished = [m for m in result.missions if m["status"] != "done"]
+    if not unfinished:
+        return None
+    for m in unfinished:
+        if m["status"] != "stuck" or m.get("stuck_reason") != "model_declared":
+            return None  # a validation failure, budget exhaustion, or anything else: generic wording
+        if m.get("server_failure_signals", 0) < MIN_SERVER_FAILURES:
+            return None
+    return MODEL_STOPPED_AFTER_SERVER_FAILURES
+
+
 def compute_run_status(result: RunResult) -> str:
     """completed | partial, from a RunResult that run_test() actually returned (a run that raised
     before returning is "failed" - handled separately in _run_in_background, there is no
@@ -127,6 +161,7 @@ class RunState:
     queue: "queue.Queue | None" = None
     running: bool = False
     last_run_status: str | None = None
+    last_partial_reason: str | None = None  # D15: only ever set alongside last_run_status == "partial"
     last_report: dict | None = None
     last_findings: list | None = None
 
@@ -172,19 +207,23 @@ def _run_in_background(url: str, reset_path: str | None, out_dir: Path, q: "queu
         with STATE.lock:
             STATE.running = False
             STATE.last_run_status = "failed"
+            STATE.last_partial_reason = None
             STATE.last_report = None
             STATE.last_findings = None
         return
 
     run_status = compute_run_status(result)
+    partial_reason = compute_partial_reason(result) if run_status == "partial" else None
     if not held_run_finished:  # run_test() is contractually supposed to have emitted this itself;
         held_run_finished = {"type": "run_finished", "t": round(time.monotonic() - start, 3),
                              "report": result.report}  # defensive fallback if it somehow did not
     held_run_finished["run_status"] = run_status
+    held_run_finished["partial_reason"] = partial_reason
     q.put(held_run_finished)
     with STATE.lock:
         STATE.running = False
         STATE.last_run_status = run_status
+        STATE.last_partial_reason = partial_reason
         STATE.last_report = result.report
         STATE.last_findings = result.findings
 
@@ -226,6 +265,7 @@ def status():
             "running": STATE.running,
             "run_id": STATE.run_id if STATE.running else None,  # lets a page reload reattach to /api/stream
             "last_run_status": STATE.last_run_status,
+            "last_partial_reason": STATE.last_partial_reason,
             "last_report": STATE.last_report,
             "last_findings": STATE.last_findings,
         }
@@ -242,6 +282,7 @@ def start_run(body: RunRequest):
         STATE.queue = q
         STATE.running = True
         STATE.last_run_status = None
+        STATE.last_partial_reason = None
         STATE.last_report = None
         STATE.last_findings = None
 

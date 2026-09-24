@@ -641,6 +641,40 @@ def test_run_test_marks_timed_out_when_the_wall_clock_is_already_spent(server, b
     assert result.missions == []  # the deadline was already gone before the first mission started
 
 
+def test_run_test_records_server_failure_signals_per_mission(server, browser, tmp_path):
+    """D15/T13-b: each mission summary carries how many server-side failure signals (http_5xx /
+    request_failed) the browser recorded for THAT mission, so the web status line can say "server
+    failures" only when they happened. Against the seeded delete bug each Delete click is a real 500.
+    Mission 2 clicks the text field, which records a no_effect signal - a signal, but not a server
+    failure - so it must read 0: the count is per mission AND only of server failures (a mutation
+    that counted every signal passed the first version of this test, which is why m2 does this)."""
+    fresh_app(server)
+    ref = _ref_for(browser, server, "button", "Delete Buy milk")
+    field = _ref_for(browser, server, "textbox", "New task")
+    m2 = Mission(id="m2", goal="Look around", category="core_flow", priority="low", why="w")
+    script = {
+        "plan": [_plan_with(MISSION, m2).model_dump()],
+        "step": [decision("click", ref, expect="the task Buy milk disappears").model_dump(),
+                decision("click", ref, expect="the task Buy milk disappears").model_dump(),
+                decision("stuck", None, expect="").model_dump(),
+                decision("click", field, expect="the field is focused, nothing else changes").model_dump(),
+                decision("done", None, expect="").model_dump()],
+        "judge": [judgement().model_dump(),
+                  judgement(step_verdicts=[StepVerdict(step=1, violated=False, reason="focusing changes nothing")]).model_dump()],
+        "disprove": [],
+    }
+    llm = LLMClient(tmp_path, mode="fake", source=script, env_file=None)
+    result = run_test(server, "live", llm, tmp_path / "out", reset_path="/__reset", browser=browser)
+
+    by_id = {m["id"]: m for m in result.missions}
+    assert by_id["m1"]["status"] == "stuck" and by_id["m1"]["stuck_reason"] == "model_declared"
+    assert by_id["m1"]["server_failure_signals"] == 2
+    assert by_id["m2"]["status"] == "done" and by_id["m2"]["server_failure_signals"] == 0
+    # m2 really did record a (non-server) signal: it surfaces as one Dropped item, the judge having
+    # said the step's expectation held - otherwise a count of 0 above would prove nothing
+    assert result.report["counts"][DROPPED] == 1
+
+
 # ================================================================================================
 # Fixes from the 2026-09-22 /review (Opus). Each test below is written to fail against the
 # pre-fix code, matching the review's own reproduction, so these are regression tests, not just

@@ -230,3 +230,132 @@ def test_failed_status_shows_no_report_card(browser):
         assert "the app could not be reached" in status_el.inner_text()
         assert page.locator("#report").is_hidden()
         context.close()
+
+
+# ---- 4. D15/T13-b: the precise partial wording, same banner, same prominence rule ---------------
+
+SPECIFIC_WORDING = ("One check stopped after repeated server failures. "
+                    "The findings below are still valid, but the full sweep did not complete.")
+GENERIC_WORDING = ("This scan did not finish. The findings below are real, but absence of a Confirmed "
+                   "issue does not mean the app passed — the sweep was cut short.")
+MODEL_STOPPED = "model_stopped_after_server_failures"
+
+
+def _visible_text(page):
+    """The status line as a reader sees it, with the ⚠ glyph and whitespace differences stripped."""
+    return " ".join(page.locator("#statusLine").inner_text().replace("⚠", "").split())
+
+
+def test_specific_partial_wording_is_exactly_the_reviewed_sentence_and_is_neutral(server, browser):
+    """The sentence states what happened and that the sweep did not complete. It must not credit the
+    model's stop as right (D15: the audit found the stop to be a vocabulary miscall, so "correctly
+    stopped" would re-do in prose what the decision refuses to do in code) and must not read as a pass."""
+    with start_web({"PROBE_LLM_MODE": "fake"}) as base:
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(base)
+        page.wait_for_selector("#banner:not([hidden])")
+        page.evaluate(f"() => renderStatusLine('partial', null, '{MODEL_STOPPED}')")
+        text = _visible_text(page)
+        assert text == SPECIFIC_WORDING
+        lowered = text.lower()
+        for word in ("correct", "appropriate", "efficient", "right call", "justified", "sensible",
+                     "passed", "success"):
+            assert word not in lowered, word
+        assert "did not complete" in lowered  # states that the sweep did not finish
+        context.close()
+
+
+def test_any_other_partial_reason_keeps_the_generic_wording_exactly(server, browser):
+    with start_web({"PROBE_LLM_MODE": "fake"}) as base:
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(base)
+        page.wait_for_selector("#banner:not([hidden])")
+        for reason in ("null", "undefined", "'something_else'", "''"):
+            page.evaluate(f"() => renderStatusLine('partial', null, {reason})")
+            assert _visible_text(page) == GENERIC_WORDING, reason
+        # the reason only refines "partial": it can never turn a failed run or a completed one into anything
+        page.evaluate(f"() => renderStatusLine('failed', 'boom', '{MODEL_STOPPED}')")
+        assert "could not finish" in page.locator("#statusLine").inner_text()
+        page.evaluate(f"() => renderStatusLine('completed', null, '{MODEL_STOPPED}')")
+        assert page.locator("#statusLine").is_hidden()
+        context.close()
+
+
+def test_specific_partial_status_line_keeps_the_prominence_rule(server, browser):
+    """The D10-amendment prominence test above, unmodified in its own right, only ever exercised the
+    generic sentence. Same assertions, run against the specific one: this decision must not weaken it."""
+    with start_web({"PROBE_LLM_MODE": "fake"}) as base:
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(base)
+        page.wait_for_selector("#banner:not([hidden])")
+        page.evaluate(f"""() => {{
+            renderStatusLine('partial', null, '{MODEL_STOPPED}');
+            renderReport({{counts: {{Confirmed: 0, Likely: 0, Improvement: 0, Dropped: 0}},
+                         elapsed_s: 12.3, llm_calls: 3, estimated_cost_usd: 0.01}});
+        }}""")
+        assert page.locator("#statusLine").is_visible()
+        assert "No confirmed issues" in page.locator(".verdict").inner_text()
+        status_size = page.eval_on_selector("#statusLine", "el => parseFloat(getComputedStyle(el).fontSize)")
+        verdict_size = page.eval_on_selector(".verdict", "el => parseFloat(getComputedStyle(el).fontSize)")
+        assert status_size >= verdict_size
+        above = page.evaluate("""() => {
+            const rel = document.querySelector('#statusLine').compareDocumentPosition(document.querySelector('#report'));
+            return !!(rel & Node.DOCUMENT_POSITION_FOLLOWING);
+        }""")
+        assert above
+        # the same class as the generic partial line, so colour and size come from the same CSS rule
+        assert page.eval_on_selector("#statusLine", "el => el.className") == "status-line partial"
+        context.close()
+
+
+def _scripted_partial_run(server, browser, steps):
+    """Drives the real page through a fake-mode run whose only mission ends the way `steps` say.
+    Zero API cost. Returns (visible status-line text, /api/status json)."""
+    fresh_app(server)
+    delete_btn = ref_for(browser, server, "button", "Delete Buy milk")
+    plan = {"app_type": "task list", "capabilities": ["delete"],
+            "missions": [{"id": "m1", "goal": "Delete an existing task", "category": "core_flow",
+                          "priority": "critical", "why": "Users could not manage their list."}]}
+    script = {"plan": [plan],
+              "step": [decision(a, delete_btn if a == "click" else None, expect="the task disappears")
+                       for a in steps],
+              "judge": [{"step_verdicts": [], "findings": []}]}
+    script_path = ROOT / "runs" / "_web_ui_partial_script.json"
+    script_path.parent.mkdir(exist_ok=True)
+    script_path.write_text(json.dumps(script), encoding="utf-8")
+    try:
+        with start_web({"PROBE_LLM_MODE": "fake", "PROBE_LLM_SOURCE": str(script_path)}) as base:
+            context = browser.new_context()
+            page = context.new_page()
+            page.goto(base)
+            page.wait_for_selector("#banner:not([hidden])")
+            page.locator("#url").fill(server)
+            page.locator("#runBtn").click()
+            page.wait_for_selector("#report:not([hidden])", timeout=30000)
+            text = _visible_text(page)
+            status = json.loads(http("GET", base + "/api/status")[1])
+            context.close()
+            return text, status
+    finally:
+        script_path.unlink(missing_ok=True)
+
+
+def test_rehearsal_1_shape_end_to_end_gets_the_specific_sentence_and_stays_partial(server, browser):
+    """Zero-cost replay of rehearsal 1's shape through the real agent, server and page: the model
+    itself says "stuck" after two real 500s from the seeded delete bug."""
+    text, status = _scripted_partial_run(server, browser, ["click", "click", "stuck"])
+    assert text == SPECIFIC_WORDING
+    assert status["last_run_status"] == "partial"           # not reclassified, not softened
+    assert status["last_partial_reason"] == MODEL_STOPPED
+
+
+def test_model_declared_stuck_without_server_failures_keeps_the_generic_sentence(server, browser):
+    """"stuck" straight away, no request ever failed: the browser has no server failure to name, so
+    the page must not name one."""
+    text, status = _scripted_partial_run(server, browser, ["stuck"])
+    assert text == GENERIC_WORDING
+    assert status["last_run_status"] == "partial"
+    assert status["last_partial_reason"] is None
