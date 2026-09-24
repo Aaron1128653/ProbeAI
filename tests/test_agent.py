@@ -446,9 +446,9 @@ def test_run_mission_does_a_sensible_two_step_mission_and_ends_done(server, brow
         decision("done", None, expect="").model_dump(),
     ]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
-    assert status == "done"
+    assert status == "done" and stuck_reason is None
     assert len(mission_run.results) == 2  # "done" itself takes no step
     assert signals == []  # adding a normal task raises no signal
 
@@ -462,7 +462,7 @@ def test_run_mission_recovers_from_one_invalid_ref_via_retry(server, browser, tm
         decision("done", None, expect="").model_dump(),
     ]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "done"
     assert len(mission_run.results) == 1  # the invalid attempt spent no step budget
@@ -472,17 +472,33 @@ def test_run_mission_ends_stuck_when_the_retry_also_fails(server, browser, tmp_p
     fresh_app(server)
     script = {"step": [decision("click", "e999").model_dump(), decision("click", "e998").model_dump()]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "stuck" and mission_run.results == [] and signals == []
+    assert stuck_reason == "validation_failed"  # D15: two invalid answers in a row - code-verified, not opinion
+
+
+def test_run_mission_records_a_model_declared_stuck_separately_from_a_validation_failure(server, browser, tmp_path):
+    """D15: the model itself choosing action="stuck" is a different exit from decide() giving up
+    after two invalid answers, but both used to collapse into the same "stuck" string. status is
+    unchanged (still "stuck", still an incomplete sweep to run_status); only the reason is new."""
+    fresh_app(server)
+    script = {"step": [decision("stuck", None, expect="I cannot proceed").model_dump()]}
+    client = fake_client(tmp_path, script)
+    mission_run, signals, status, stuck_reason = run_mission(
+        browser, server, "/__reset", MISSION, client, 6, time.monotonic() + 30, tmp_path / "m",
+        DEFAULT_IGNORE_PATHS, Meter())
+    assert status == "stuck" and stuck_reason == "model_declared"
+    assert mission_run.results == [] and signals == []
 
 
 def test_run_mission_times_out_before_taking_any_step(server, browser, tmp_path):
     fresh_app(server)
     client = fake_client(tmp_path, {})  # no answers needed: the deadline is already past
-    mission_run, signals, status = run_mission(browser, server, "/__reset", MISSION, client, 6,
+    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 6,
                                                time.monotonic() - 1, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "timed_out" and mission_run.results == []
+    assert stuck_reason is None  # a timeout is not a kind of "stuck"
 
 
 def test_run_mission_stops_at_the_step_budget(server, browser, tmp_path):
@@ -490,9 +506,10 @@ def test_run_mission_stops_at_the_step_budget(server, browser, tmp_path):
     box = _ref_for(browser, server, "checkbox", "Write report")
     script = {"step": [decision("check", box, expect="it becomes ticked").model_dump()]}
     client = fake_client(tmp_path, script)
-    mission_run, signals, status = run_mission(browser, server, "/__reset", MISSION, client, 1,
+    mission_run, signals, status, stuck_reason = run_mission(browser, server, "/__reset", MISSION, client, 1,
                                                time.monotonic() + 30, tmp_path / "m", DEFAULT_IGNORE_PATHS, Meter())
     assert status == "budget_exceeded" and len(mission_run.results) == 1
+    assert stuck_reason is None
 
 
 # ---- replay_mission() + build_mission_items() against a real mission_run --------------------

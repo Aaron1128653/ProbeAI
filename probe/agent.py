@@ -228,13 +228,26 @@ def decide(llm, mission, history: list[dict], state, meter: Meter):
 def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: int, deadline: float,
                 out_dir, ignore_paths, meter: Meter):
     """Drive the browser for one mission, one LLM-chosen action at a time. Returns (Run, signals,
-    status); status is one of done, stuck, timed_out, budget_exceeded. The Run is built exactly
-    like a scripted one (T2/T3), so it can be replayed, judged and reported the same way."""
+    status, stuck_reason); status is one of done, stuck, timed_out, budget_exceeded. The Run is
+    built exactly like a scripted one (T2/T3), so it can be replayed, judged and reported the same way.
+
+    stuck_reason (D15) distinguishes the two ways `status` becomes "stuck" - it does not change
+    what "stuck" means to run_status (still an incomplete sweep either way; see D15's audit of
+    why trusting the model's own "stuck" as a sign of a *successful* stop would be exactly the
+    self-certification the decision rules out). It exists only so a person or the status line can
+    say precisely what happened: "validation_failed" when the model's chosen ref/action failed
+    validate_decision twice in a row (D8's retry-then-stuck rule) - a code-verified failure, not
+    the model's opinion of itself; "model_declared" when the model's own `action` was "stuck" -
+    the schema value the prompt defines as "you cannot proceed", not "done" (D15 found this can be
+    a vocabulary miscall: a mission can end this way after the model's own `reasoning` describes
+    exactly what "done" is defined as - the goal tried and its outcome observed - without that
+    being decided here, or anywhere in code)."""
     context = new_context(browser)
     page = context.new_page()
     recorder = EvidenceRecorder(page, out_dir, ignore_paths)
     policy = SafetyPolicy(allowed_origin=base_url, max_steps=step_budget)
     status = "done"
+    stuck_reason: str | None = None
     started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     load: dict = {}
     states: list = []
@@ -259,9 +272,12 @@ def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: i
             decision, error = decide(llm, mission, history, state, meter)
             if decision is None:
                 status = "stuck"
+                stuck_reason = "validation_failed"
                 break
             if decision.action in ("done", "stuck"):
                 status = decision.action
+                if status == "stuck":
+                    stuck_reason = "model_declared"
                 break
 
             n += 1
@@ -285,7 +301,7 @@ def run_mission(browser, base_url: str, reset_path, mission, llm, step_budget: i
         context.close()
 
     run = Run(url=base_url, started_at=started_at, load=load, states=states, results=results)
-    return run, signals, status
+    return run, signals, status, stuck_reason
 
 
 # ---- judging and verifying one mission ------------------------------------------------------
@@ -545,8 +561,9 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
         mission_budget = min(profile.max_steps_per_mission, profile.max_total_steps - steps_used)
         emit("mission_started", mission=mission.model_dump())
 
-        mission_run, signals, status = run_mission(browser, base_url, reset_path, mission, llm,
-                                                    mission_budget, deadline, mission_out, ignore_paths, meter)
+        mission_run, signals, status, stuck_reason = run_mission(
+            browser, base_url, reset_path, mission, llm, mission_budget, deadline, mission_out,
+            ignore_paths, meter)
         steps_used += len(mission_run.results)
         timed_out = timed_out or status == "timed_out"
         all_evidence[mission.id] = evidence_dict(mission_run)
@@ -573,7 +590,8 @@ def _run_test(base_url, profile: Profile, llm, out_dir: Path, on_event, reset_pa
         items = build_mission_items(mission, mission_run, candidates, judgement, llm, meter, deadline=deadline)
         all_findings += items
         mission_summaries.append({"id": mission.id, "goal": mission.goal, "status": status,
-                                  "steps": len(mission_run.results)})
+                                  "steps": len(mission_run.results),
+                                  "stuck_reason": stuck_reason})  # D15: additive, None unless stuck
         emit("mission_judged", mission=mission.id, status=status, findings=len(items))
         for item in items:
             emit("finding", **item)
