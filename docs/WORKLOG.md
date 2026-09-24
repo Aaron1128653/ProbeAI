@@ -2,6 +2,15 @@
 
 Newest day first. Updated after every finished task (see CLAUDE.md working rules). `/wrapup` writes the final entry of a session.
 
+## 2026-09-24
+
+**IN PROGRESS (written mid-task so a cutoff loses nothing): T13, D15's status-line work.** Resumed after the 2026-09-23 session ended with T13 half-built. Last green commit: `a016b73` (T13-a). Tree was clean before this note.
+- **T13-a done** (`a016b73`): `run_mission` returns `stuck_reason` (`validation_failed` | `model_declared` | None), threaded into each mission summary as an additive key; `status` untouched. 112 tests green across test_agent/test_web/test_evaluate.
+- **T13-b next**: neutral status-line wording for the model-declared-only case. Accuracy issue found while starting it, for the record: D15's example sentence says "repeated server failures", but the code only knows the model said `stuck`, not why - so the sentence could be false. Resolution (conservative, inside D15's "otherwise keep today's generic wording"): use the new sentence ONLY when the stuck mission also recorded >=2 `http_5xx`/`request_failed` signals (deterministic, already computed); otherwise today's generic wording. Adds one additive summary key (`server_failure_signals`) and a `partial_reason` on the run_finished event and /api/status.
+- **T13-c after that**: QA_NOTES + WORKLOG entries (the m3 miscall finding; the third-terminal-action question deferred as V2, n=1; the wording-neutrality catch).
+- **Then**: rehearsals 2 and 3 (record mode, web UI, ~$0.05 each) - needs the user's go.
+- **Standing instruction from the user (2026-09-24), saved to memory**: stop and log before the 5-hour quota runs out, with headroom; keep WORKLOG + commits current every step so the next session resumes cleanly.
+
 ## 2026-09-23
 
 **Done**
