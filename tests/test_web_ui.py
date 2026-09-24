@@ -311,9 +311,11 @@ def test_specific_partial_status_line_keeps_the_prominence_rule(server, browser)
         context.close()
 
 
-def _scripted_partial_run(server, browser, steps):
+def _scripted_run(server, browser, steps, judge=None):
     """Drives the real page through a fake-mode run whose only mission ends the way `steps` say.
-    Zero API cost. Returns (visible status-line text, /api/status json)."""
+    Zero API cost. Returns what a viewer sees and what the API says: the status line (text and
+    whether it is visible), the on-screen log, the finding cards' titles in DOM order, and
+    /api/status. `judge` is the one judge answer (default: nothing to report)."""
     fresh_app(server)
     refs = {"click": ref_for(browser, server, "button", "Delete Buy milk"),
             # a DIFFERENT element: D16's repeat guard ends a mission when the same click fails the same
@@ -325,7 +327,7 @@ def _scripted_partial_run(server, browser, steps):
     script = {"plan": [plan],
               "step": [decision("click" if a == "click_other" else a, refs.get(a), expect="the task disappears")
                        for a in steps],
-              "judge": [{"step_verdicts": [], "findings": []}]}
+              "judge": [judge or {"step_verdicts": [], "findings": []}]}
     script_path = ROOT / "runs" / "_web_ui_partial_script.json"
     script_path.parent.mkdir(exist_ok=True)
     script_path.write_text(json.dumps(script), encoding="utf-8")
@@ -338,12 +340,20 @@ def _scripted_partial_run(server, browser, steps):
             page.locator("#url").fill(server)
             page.locator("#runBtn").click()
             page.wait_for_selector("#report:not([hidden])", timeout=30000)
-            text = _visible_text(page)
-            status = json.loads(http("GET", base + "/api/status")[1])
+            seen = {"text": _visible_text(page), "status_visible": page.locator("#statusLine").is_visible(),
+                    "log": page.locator("#log").inner_text(),
+                    "titles": page.locator(".finding .title").all_inner_texts(),
+                    "status": json.loads(http("GET", base + "/api/status")[1])}
             context.close()
-            return text, status
+            return seen
     finally:
         script_path.unlink(missing_ok=True)
+
+
+def _scripted_partial_run(server, browser, steps):
+    """(visible status-line text, /api/status json) - the shape the T13 tests below were written for."""
+    seen = _scripted_run(server, browser, steps)
+    return seen["text"], seen["status"]
 
 
 def test_rehearsal_1_shape_end_to_end_gets_the_specific_sentence_and_stays_partial(server, browser):
@@ -363,3 +373,113 @@ def test_model_declared_stuck_without_server_failures_keeps_the_generic_sentence
     assert text == GENERIC_WORDING
     assert status["last_run_status"] == "partial"
     assert status["last_partial_reason"] is None
+
+
+# ---- 5. D16/T14-b: the repeat guard's log line, and tier-sorted finding cards ---------------------
+
+GUARD_JUDGE = {"step_verdicts": [{"step": 1, "violated": True, "reason": "the task is still there"}],
+               "findings": [{"step": 1, "kind": "bug", "title": "Delete fails", "severity": "high",
+                             "impact": "Users cannot remove tasks.", "expected": "the task disappears",
+                             "observed": "the task remains", "suggestion": "check the DELETE handler"}]}
+
+
+def test_rehearsal_1_shape_with_the_same_button_now_completes_with_one_plain_log_line(server, browser):
+    """The exact shape that ended `partial` in all three real rehearsals, minus the model's extra
+    retries: the same Delete clicked twice, two identical 500s. D16's guard ends the mission as done
+    from the browser's own evidence, so the run is `completed` (no amber line at all), the finding is
+    still there, and one neutral log line says why the mission stopped early. The script holds no
+    `stuck` entry: a third step call would fail on the exhausted fake script."""
+    seen = _scripted_run(server, browser, ["click", "click"], judge=GUARD_JUDGE)
+    assert seen["status"]["last_run_status"] == "completed"
+    assert seen["status_visible"] is False
+    assert seen["status"]["last_partial_reason"] is None
+    assert ("Finished: m1 (1 found) - stopped after the same action failed the same way twice "
+            "(steps 1 and 2)") in seen["log"]
+    assert seen["titles"] == ["Delete fails"]                     # still reported, still Confirmed below
+    assert [f["tier"] for f in seen["status"]["last_findings"]] == ["Confirmed"]
+
+
+def test_a_mission_that_ends_normally_gets_no_guard_text_in_the_log(server, browser):
+    seen = _scripted_run(server, browser, ["click", "done"])
+    assert "Finished: m1" in seen["log"]
+    assert "stopped after" not in seen["log"]
+
+
+def test_finding_cards_are_sorted_by_tier_live_and_after_a_reload_without_touching_the_data(server, browser):
+    """m1 yields a Likely and an Improvement, m2 (the later mission) yields the Confirmed delete. They
+    ARRIVE in that order - the same shape as rehearsals 2 and 3, where the one proven finding sat at
+    the bottom. The page must show Confirmed, Likely, Improvement, both as the run streams in and
+    after a reload, while the data the API returns keeps its arrival order."""
+    fresh_app(server)
+    field = ref_for(browser, server, "textbox", "New task")
+    add_btn = ref_for(browser, server, "button", "Add")
+    delete_btn = ref_for(browser, server, "button", "Delete Buy milk")
+    plan = {"app_type": "task list", "capabilities": ["add", "delete"],
+            "missions": [{"id": "m1", "goal": "Reject a duplicate task", "category": "input_validation",
+                          "priority": "medium", "why": "Duplicates would confuse users."},
+                         {"id": "m2", "goal": "Delete an existing task", "category": "core_flow",
+                          "priority": "critical", "why": "Users could not manage their list."}]}
+    script = {
+        "plan": [plan],
+        "step": [decision("type", field, text="Buy milk", expect="the box holds the text I typed"),
+                 decision("click", add_btn, expect="a duplicate is rejected with a visible message"),
+                 decision("done", None, expect=""),
+                 decision("click", delete_btn, expect="the task disappears"),
+                 decision("done", None, expect="")],
+        "judge": [
+            {"step_verdicts": [],
+             "findings": [{"step": 1, "kind": "bug", "title": "Likely thing from m1", "severity": "medium",
+                           "impact": "x", "expected": "e", "observed": "o", "suggestion": "s"},
+                          {"step": 2, "kind": "improvement", "title": "Improvement thing from m1",
+                           "severity": "low", "impact": "x", "expected": "e", "observed": "o", "suggestion": "s"}]},
+            GUARD_JUDGE],
+    }
+    script_path = ROOT / "runs" / "_web_ui_order_script.json"
+    script_path.parent.mkdir(exist_ok=True)
+    script_path.write_text(json.dumps(script), encoding="utf-8")
+    try:
+        with start_web({"PROBE_LLM_MODE": "fake", "PROBE_LLM_SOURCE": str(script_path)}) as base:
+            context = browser.new_context()
+            page = context.new_page()
+            page.goto(base)
+            page.wait_for_selector("#banner:not([hidden])")
+            page.locator("#url").fill(server)
+            page.locator("#runBtn").click()
+            page.wait_for_selector("#report:not([hidden])", timeout=30000)
+
+            def badges():
+                return [b.strip().lower() for b in page.locator(".finding .badge").all_inner_texts()]
+
+            live = badges()
+            api = json.loads(http("GET", base + "/api/status")[1])["last_findings"]
+            arrival = [f["tier"] for f in api if f["tier"] != "Dropped"]
+            assert set(arrival) == {"Confirmed", "Likely", "Improvement"}, arrival  # the fixture gave all three
+            assert arrival[-1] == "Confirmed", "fixture must deliver the Confirmed item LAST, like rehearsals 2-3"
+            assert live == ["confirmed", "likely", "improvement"], live
+
+            page.reload()
+            page.wait_for_selector("#report:not([hidden])", timeout=30000)
+            assert badges() == ["confirmed", "likely", "improvement"]
+            assert [f["tier"] for f in json.loads(http("GET", base + "/api/status")[1])["last_findings"]
+                    if f["tier"] != "Dropped"] == arrival  # the data is untouched by the display sort
+            context.close()
+    finally:
+        script_path.unlink(missing_ok=True)
+
+
+def test_finding_order_within_a_tier_stays_arrival_order(server, browser):
+    """Sorting is by tier only: two Likely cards keep the order they arrived in."""
+    with start_web({"PROBE_LLM_MODE": "fake"}) as base:
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(base)
+        page.wait_for_selector("#banner:not([hidden])")
+        order = page.evaluate("""() => {
+            for (const [tier, title] of [["Likely", "first likely"], ["Improvement", "an improvement"],
+                                         ["Likely", "second likely"], ["Confirmed", "the confirmed"]]) {
+              handleFinding({tier, title});
+            }
+            return Array.from(document.querySelectorAll('#findings .finding .title')).map(e => e.textContent);
+        }""")
+        assert order == ["the confirmed", "first likely", "second likely", "an improvement"]
+        context.close()

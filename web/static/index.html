@@ -155,7 +155,13 @@ function plainTextFor(event) {
     case "run_started":   return `Looking at ${event.url}…`;
     case "plan":           return `Understood the app: ${event.app_type}. ${event.missions.length} thing(s) worth checking.`;
     case "mission_started": return `Checking: ${event.mission.goal}`;
-    case "mission_judged": return `Finished: ${event.mission} (${event.findings} found)`;
+    case "mission_judged": {
+      const base = `Finished: ${event.mission} (${event.findings} found)`;
+      // D16: the repeat guard ended this mission from browser evidence. Neutral on purpose: it states
+      // our rule's trigger and says nothing about whether the model was right or wrong.
+      const g = event.terminal_reason === "repeated_hard_signal" ? event.repeat_guard : null;
+      return g ? `${base} - stopped after the same action failed the same way twice (steps ${g.first_step} and ${g.repeat_step})` : base;
+    }
     default: return null;
   }
 }
@@ -211,6 +217,7 @@ function shotUrl(runId, mission, filename) {
 function findingCard(f) {
   const div = document.createElement("div");
   div.className = "finding";
+  div.dataset.tier = f.tier;  // read by handleFinding to keep the list sorted by tier
   const shots = (f.mission && f.screenshot_before && f.screenshot_after) ? `
     <div class="shots">
       <a href="${shotUrl(currentRunId, f.mission, f.screenshot_before)}" target="_blank" rel="noopener">
@@ -242,9 +249,20 @@ function updateDroppedBox() {
   ).join("");
 }
 
+// D16: display order only. Cards arrive one mission at a time, so a Confirmed item from the last
+// mission would otherwise land below Likely ones from earlier missions (it did, in rehearsals 2 and 3).
+// Each card is inserted before the first card of a lower rank, so the proven item is on top the moment
+// it arrives and nothing jumps at the end of the run. Within a tier, arrival order. The report and
+// findings data are not touched; the reload path (renderFindings) goes through here too.
+const TIER_RANK = { Confirmed: 0, Likely: 1, Improvement: 2 };
+function tierRank(tier) { return tier in TIER_RANK ? TIER_RANK[tier] : 3; }
+
 function handleFinding(f) {
   if (f.tier === "Dropped") { droppedItems.push(f); updateDroppedBox(); return; }
-  $("findings").appendChild(findingCard(f));
+  const card = findingCard(f);
+  const rank = tierRank(f.tier);
+  const firstLowerRank = Array.from($("findings").children).find(c => tierRank(c.dataset.tier) > rank);
+  $("findings").insertBefore(card, firstLowerRank || null);
 }
 
 function renderFindings(findings) {
