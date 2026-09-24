@@ -1,0 +1,3 @@
+REPLAY FIXTURE - not live. This is the model-call record of rehearsal 5, a real API run through the web page on 2026-09-24 against the seeded TaskBoard demo app (`runs/web_c5333263`): completed, delete bug Confirmed, repeat guard fired on m3. It holds our prompts (public in docs/PROMPTS.md), ARIA snapshots of the synthetic app and the model's answers. Scanned before commit (D18): no API key, no .env content, no personal data, no path outside the repo, only URL http://127.0.0.1:8765/. Served by `demo_fallback/start_replay.py`; pinned by `tests/test_d17_fallback.py`. Replacing it needs a /decide entry.
+
+sha256 bda600a35bdf1c475eebf2ae41a92db9e20e187dc037b7f0e047695bfbcd3067

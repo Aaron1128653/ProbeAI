@@ -14,7 +14,7 @@ Mechanical-engineering PhD (AUT). Strong in Python/MATLAB, experimental design, 
 The user must be able to explain every line in Q&A, so: **Python end to end, few dependencies, no framework the user cannot explain, plain readable code.**
 
 ## Direction
-The source of truth is `docs/DECISIONS.md` (D1-D17; later entries amend earlier ones - see that file's header; D17: feature freeze from 2026-09-24, reopen rules there); evidence in `docs/RESEARCH.md`. One-line summary:
+The source of truth is `docs/DECISIONS.md` (D1-D18; later entries amend earlier ones - see that file's header; D17: feature freeze from 2026-09-24, reopen rules there); evidence in `docs/RESEARCH.md`. One-line summary:
 ProbeAI takes a staging URL -> LLM builds an app model and 3-5 missions -> executes atomic steps chosen by ARIA-snapshot ref -> deterministic oracles record evidence -> judge proposes findings -> verify by clean-context replay -> tiered report (Confirmed / Likely / Improvement).
 Stack: Python, playwright, anthropic SDK, FastAPI + one static HTML page, JSON files. No Stagehand, no React, no database.
 Core sentences: the AI decides what is worth testing; the browser provides the evidence; suspected failures are reproduced before being called confirmed.
@@ -30,7 +30,7 @@ Whole run should finish in about 2 minutes; UI streams every step as it happens.
 ## Working rules
 - Verify by running the thing; show real output before saying "done".
 - Keep `docs/DECISIONS.md` (why) and `docs/QA_NOTES.md` (how to explain each part in Q&A) current.
-- Git is in use: one commit per finished task. Commit message = what and why. Never commit `.env`, `.venv/`, `runs/`.
+- Git is in use: one commit per finished task. Commit message = what and why. Never commit `.env`, `.venv/`, `runs/`. Exception (D18): curated, secret-scanned replay fixtures under `demo_fallback/fixture/` are committed on purpose as the labelled demo fallback; `runs/` itself is still never committed, and adding or replacing a fixture needs a `/decide` entry.
 - After every finished task append to `docs/WORKLOG.md` (today's section: done / evidence / next / blockers). Do it continuously, not only at the end of the day.
 - Usage limits are not visible to the assistant. If a limit or low-usage message appears, or the user says so, stop new work and run `/wrapup`.
 - API money: the user funded 20 USD and wants most of it left (D9). Total real spend cap 10 USD; per-run cap 0.30; `PROBE_LLM_MODE` has no default and real/record runs need `--yes-spend`. Build and test with fake or replay; a real call needs an explicit go from the user. Never hard-code keys; the user creates `.env` locally; never print, log or commit the key.

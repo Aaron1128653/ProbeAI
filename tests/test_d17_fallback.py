@@ -2,8 +2,12 @@
 
 Zero cost. Nothing here calls the API: the fallback tests run the web server in REPLAY mode (which
 has no client at all; the key given to it is deliberately a bogus one, so a stray real call would
-fail loudly), and the corpus tests only read recordings. `runs/` is git-ignored, so on a machine
-without the recordings every test here skips rather than failing.
+fail loudly), and the corpus tests only read recordings.
+
+The replay tests use the COMMITTED fixture (D18: `demo_fallback/fixture/`, pinned by hash) and FAIL,
+not skip, if it is missing - a fallback that silently vanishes is the failure this exists to catch.
+The corpus tests and the byte-identity test read `runs/`, which is git-ignored, so on a machine (or a
+fresh clone) without the recordings they skip.
 
 What the fallback is: rehearsal 5 (`runs/web_c5333263`), the clean post-fix run - completed, the
 delete bug Confirmed, the repeat guard's log line, Confirmed card first. Its recording replays only
@@ -28,7 +32,9 @@ from test_web_ui import start_web
 ROOT = Path(__file__).resolve().parent.parent
 RUNS = ROOT / "runs"
 LEDGER = RUNS / "spend_ledger.jsonl"
-FALLBACK = RUNS / "web_c5333263" / "llm_record.jsonl"
+FALLBACK = ROOT / "demo_fallback" / "fixture" / "rehearsal5_llm_record.jsonl"
+ORIGINAL = RUNS / "web_c5333263" / "llm_record.jsonl"
+PINNED_SHA256 = "bda600a35bdf1c475eebf2ae41a92db9e20e187dc037b7f0e047695bfbcd3067"
 GUARD_LINE = "Finished: m3 (1 found) - stopped after the same action failed the same way twice (steps 1 and 2)"
 BOGUS_KEY = "sk-ant-not-a-real-key-replay-must-never-use-it"
 
@@ -50,8 +56,7 @@ def _replay_through_the_page(browser, server: str, max_missions: str) -> dict:
     """Drive the served page exactly as a presenter would (Advanced -> reset path -> Run) against the
     replay server, and return what was on screen plus what the API says. Removes the run folder the
     server created, and checks nothing was added to the spend ledger."""
-    if not FALLBACK.exists():
-        pytest.skip("rehearsal 5's recording is machine-local (runs/ is git-ignored)")
+    assert FALLBACK.exists(), "the committed fallback fixture is missing (D18)"
     fresh_app(server)
     before_dirs, before_ledger = {p.name for p in RUNS.glob("web_*")}, _ledger_lines()
     try:
@@ -102,6 +107,36 @@ def test_without_the_three_mission_variable_the_fallback_replays_only_m1(server,
     assert "Finished: m1" in seen["log"] and "Finished: m2" not in seen["log"] and "Finished: m3" not in seen["log"]
     assert seen["status"]["last_report"]["counts"]["Confirmed"] == 0
     assert seen["badges"] != ["confirmed", "likely", "likely"]
+
+
+# ---- the committed fixture itself (D18): pinned, clean, and the real run's own record ----------------
+
+def test_the_committed_fixture_is_pinned_and_clean():
+    import hashlib
+    import re
+    raw = FALLBACK.read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == PINNED_SHA256   # -text in .gitattributes keeps this true on a clone
+    text = raw.decode("utf-8")
+    lines = [l for l in text.splitlines() if l.strip()]
+    records = [json.loads(l) for l in lines]
+    assert len(records) == 12
+    assert all(set(r) == {"role", "model", "system", "user", "answer"} for r in records)
+    roles = [r["role"] for r in records]
+    assert (roles.count("plan"), roles.count("step"), roles.count("judge")) == (1, 8, 3)
+    for needle in ("sk-ant", "ANTHROPIC_API_KEY", ".env"):
+        assert needle not in text, needle
+    for pattern in (r"sk-[A-Za-z0-9]{8}", r"[\w.+-]+@[\w-]+\.[\w.]+", r"(?i)users[\\/]"):
+        assert re.search(pattern, text) is None, pattern
+    for r in records:
+        for field in ("system", "user"):
+            assert re.search(r"[A-Za-z]:\\[A-Za-z]", r[field]) is None, "a Windows path in a prompt"
+    assert all(u.startswith("http://127.0.0.1:8765/") for u in re.findall(r"https?://\S+", text))
+
+
+def test_the_fixture_is_byte_identical_to_the_run_it_came_from():
+    if not ORIGINAL.exists():
+        pytest.skip("the original run is machine-local (runs/ is git-ignored)")
+    assert FALLBACK.read_bytes() == ORIGINAL.read_bytes()
 
 
 # ---- the plan facts: how often does the live profile's three-mission cut drop the delete check? ----
