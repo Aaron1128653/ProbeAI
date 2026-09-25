@@ -77,7 +77,9 @@ Project: ProbeAI, an AI web-app tester built as a take-home engineering exercise
 | 8025b51 | Deck plan: approved outline v1 and the Gate 2 sample spec (Opus rulings on the advisor's review) | 363 |
 | fcd70ae | Deck Gate 2: build/render/QA scripts for the 3-slide sample; binaries held back | 363 |
 | bc205ca | D19 + T17-a: Gate 3 spec, branch B reworded, narrow exception for deck pictures | 363 |
-| (Gate 3) | Deck Gate 3: the full 19-slide deck (`deck/ProbeAI_deck.pptx`), scripts, five privacy-checked screenshots | 363 |
+| 1a252eb | Deck Gate 3: the full 19-slide deck (`deck/ProbeAI_deck.pptx`), scripts, five privacy-checked screenshots | 363 |
+| dc622a0 | gitignore: PowerPoint lock files under `deck/` | 363 |
+| (D20) | D20 + T18-a/b: deck final polish - cover promise+proof, slide 3 nuance, slide 5 source, slide 8 headline, QA tolerance rule, build/QA/render side-build override; the master pptx is swapped in by a follow-up commit once PowerPoint releases the file | 363 |
 
 **No commit for any real API run** (the 2026-09-22 first call and N=5 batch, the 2026-09-23 N=3 batch, canary and single disprove call): each produced only files under `runs/`, which is git-ignored on purpose (it can hold real request/response content). Their outcomes are recorded in `docs/DECISIONS.md`'s D9 addendum and `docs/WORKLOG.md` instead. First run: mode `record`, $0.10 cap, cost $0.020443, 6 calls, no errors. Evaluation batch: mode `record`, `--n 5`, 11 runs, cost $0.845632 (see section 4).
 

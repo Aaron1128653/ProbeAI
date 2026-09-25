@@ -19,3 +19,4 @@ deck/.venv-deck/
 deck/renders/
 deck/ProbeAI_sample.pptx
 deck/~$*
+deck/_build/
