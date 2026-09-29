@@ -1,7 +1,7 @@
 # AI App Tester — take-home engineering exercise
 
 Source material: `Project background/` (brief, requirements, invitation). Background of the user: `Mybackground/`.
-Presentation: in person on 2026-10-07, 08 or 09 (slot TBC). 10 min talk + Q&A. Panel includes a non-engineer.
+Presentation: in person, **confirmed Wednesday 2026-10-07, [time removed]**, [venue removed] (the company's email of 2026-09-29). 10 min talk + Q&A. Panel includes a non-engineer.
 Deliverables: (1) prototype that runs LIVE, (2) one-page write-up (problem / options / out-of-scope), (3) short slide deck.
 
 ## Model split (standing rule)
@@ -14,7 +14,7 @@ Mechanical-engineering PhD (AUT). Strong in Python/MATLAB, experimental design, 
 The user must be able to explain every line in Q&A, so: **Python end to end, few dependencies, no framework the user cannot explain, plain readable code.**
 
 ## Direction
-The source of truth is `docs/DECISIONS.md` (D1-D21; later entries amend earlier ones - see that file's header; D17: feature freeze from 2026-09-24, reopen rules there); evidence in `docs/RESEARCH.md`. One-line summary:
+The source of truth is `docs/DECISIONS.md` (D1-D22; later entries amend earlier ones - see that file's header; D17: feature freeze from 2026-09-24, reopen rules there; D22: day-by-day plan to the confirmed 2026-10-07 presentation); evidence in `docs/RESEARCH.md`. One-line summary:
 ProbeAI takes a staging URL -> LLM builds an app model and 3-5 missions -> executes atomic steps chosen by ARIA-snapshot ref -> deterministic oracles record evidence -> judge proposes findings -> verify by clean-context replay -> tiered report (Confirmed / Likely / Improvement).
 Stack: Python, playwright, anthropic SDK, FastAPI + one static HTML page, JSON files. No Stagehand, no React, no database.
 Core sentences: the AI decides what is worth testing; the browser provides the evidence; suspected failures are reproduced before being called confirmed.
@@ -22,7 +22,7 @@ Out of scope V1: repo analysis, accessibility/Lighthouse scanning, auth-heavy fl
 
 ## Hard requirements (from Task_Requirements)
 1 accept input pointing at an app - 2 analyse with AI, not fixed test cases - 3 report bugs AND improvements - 4 readable output for developers - 5 run live in front of the panel.
-Narrow-but-working beats broad-but-broken. Feature freeze: 2026-10-03. Then slides, write-up, rehearsal, fallback.
+Narrow-but-working beats broad-but-broken. Feature freeze: in force since 2026-09-24 (D17); 2026-10-03 is the last day a fix to frozen code may land (D22). Then slides, write-up, rehearsal, fallback.
 
 ## Live-demo rules
 Whole run should finish in about 2 minutes; UI streams every step as it happens. Keep an API-outage fallback (clearly labelled replay of a real earlier run) but the primary demo is live. Rehearse on the real network/hotspot.
