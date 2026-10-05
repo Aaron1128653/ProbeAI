@@ -19,7 +19,7 @@ Stop any of them by the PID that owns its port, never by image name (other work 
 
 - [ ] `.venv\Scripts\python.exe -m pytest -q tests/test_d17_fallback.py` passes (the fixture is intact and replays: REPLAY banner, completed, 1 / 2 / 0 / 0).
 - [ ] Spend headroom: `.venv\Scripts\python.exe -c "import json;print(sum(json.loads(l)['cost_usd'] for l in open('runs/spend_ledger.jsonl') if l.strip()))"` (self-imposed cap 10 USD, Console limit 15, per-run cap 0.30; one run is about 0.05).
-- [ ] Both tabs open: live (8000) and replay (8001). In the **live tab** open *Advanced* and type `/__reset` in the reset-path box (the page does not remember it); URL `http://127.0.0.1:8765/`.
+- [ ] Both tabs open: live (8000) and replay (8001). In the **live tab** open *Advanced* and type `/__reset` in the reset-path box (the page does not remember it); URL `http://127.0.0.1:8765/`. **Two underscores - copy and paste it from here.** A typo (`/_reset`, seen on 5 Oct) fails loudly with a red `failed` status ("reset /_reset answered 404") and costs nothing; fix it and click again, and say it was a typo.
 - [ ] The live banner reads **LIVE**; the replay banner reads **REPLAY**. Laptop on power, sleep off, browser zoom so the log and the first card fit.
 - [ ] Do not start a run before the talk unless you are rehearsing; a rehearsal run adds a real sample to the record (report it as one).
 - [ ] **Timed run-throughs on REPLAY: count the live segment as 60 s** (a replay takes about 11 s, a live run about 55 s; timing on REPLAY alone under-times the talk).
