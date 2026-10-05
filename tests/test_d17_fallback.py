@@ -17,7 +17,8 @@ nothing - a misleading fallback. Test 2 pins that, so nobody "simplifies" the va
 
 Numbers pinned by the corpus tests were derived by the tests themselves from the recordings. D17's
 first version said position 3 in 19 / position 4 in 7 and 15 of 16 delete missions retried; the
-recordings say 20 / 6 and 14 of 15 (recorded as a D17 amendment). If they ever differ again that is a
+recordings said 20 / 6 and 14 of 15 (a D17 amendment), and with the owner's runs 7 and 8 added (D23) 20 / 8 of 28
+plans, still 14 of 15 retried. If they ever differ again that is a
 FINDING: report it, do not retune the numbers so they agree.
 """
 import json
@@ -40,7 +41,8 @@ BOGUS_KEY = "sk-ant-not-a-real-key-replay-must-never-use-it"
 
 PLAN_BATCHES = ("eval_2026-09-22", "eval_2026-09-23_n3", "eval_2026-09-23_canary")
 SINGLE_RUNS = ("first_real_2026-09-22", "web_e9ab64af", "web_44bd99e2", "web_2690feac",
-               "web_d9c0496c", "web_c5333263", "web_ef484e45")
+               "web_d9c0496c", "web_c5333263", "web_ef484e45",
+               "web_c9331033", "web_e63befc0")   # D23: the owner's own live runs 7 and 8 of 25 Sep
 
 
 def _ledger_lines() -> int:
@@ -165,10 +167,11 @@ def recordings():
     return _plan_dirs()
 
 
-def test_the_planner_proposed_delete_in_every_plan_and_the_live_cut_drops_it_in_six_of_26(recordings):
-    """The AI proposed a delete check in 26 of 26 recorded plans: at list position 3 in 20 (kept by the
-    live profile's `plan.missions[:3]`) and at position 4 in 6 (dropped by it). Rehearsal 6 is one of the 6."""
-    assert len(recordings) == 26
+def test_the_planner_proposed_delete_in_every_plan_and_the_live_cut_drops_it_in_eight_of_28(recordings):
+    """The AI proposed a delete check in 28 of 28 recorded plans: at list position 3 in 20 (kept by the
+    live profile's `plan.missions[:3]`) and at position 4 in 8 (dropped by it). Rehearsal 6 and the owner's
+    runs 7 and 8 are three of the 8."""
+    assert len(recordings) == 28
     positions = {}
     for run_dir in recordings:
         missions = _first_plan(run_dir)["missions"]
@@ -177,7 +180,7 @@ def test_the_planner_proposed_delete_in_every_plan_and_the_live_cut_drops_it_in_
         assert hits, f"{run_dir.name}: no delete mission proposed"
         assert missions[hits[0] - 1]["id"] == f"m{hits[0]}"             # list order and ids agree
         positions[hits[0]] = positions.get(hits[0], 0) + 1
-    assert positions == {3: 20, 4: 6}, positions
+    assert positions == {3: 20, 4: 8}, positions
     six = _first_plan(RUNS / "web_ef484e45")["missions"]
     assert "delet" in six[3]["goal"].lower() and all("delet" not in m["goal"].lower() for m in six[:3])
 
