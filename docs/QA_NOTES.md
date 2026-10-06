@@ -263,3 +263,9 @@ For each part of the system: what it does, why it is built this way, how to say 
 - **How I'd say it out loud.** "I also ran it once, live, on the clean copy of the app. Same three checks: it reported nothing. On the faulty copy the same paths gave me the two findings. One run proves little, but it's the control I wanted."
 - **Counts.** Not part of the ten-run account (that is the demo path on the faulty app). Its plan counts in the plan corpus: 31 plans, delete third in 20, fourth in 11.
 
+## 2026-10-06 - "Who checked the findings by hand?" (Opus read of the write-up)
+- **What the record says.** The evaluation findings were adjudicated one by one against the answer key, in `runs/eval_*/adjudication.json`; the notes in those files are in the assistant's voice ("Read every finding ... myself"). So the honest wording is "every finding was read one by one against the answer key", not "I read every finding by hand", unless the owner personally read them.
+- **Write-up** now says "read one by one". **Deck** still says "checked by hand" in slide 7's source line and notes, slide 10 ("Measured by hand, misses included") and backup B3 ("Checked by hand"); the spoken version should be "read one by one, not just keyword-matched" unless the owner did read each one (a notes-only change, D22).
+- **If asked "who read them?"** "The comparison against the answer key was done one finding at a time, by the assistant and checked by me" - say only the part that is true for you.
+- **Also corrected in the write-up:** "two faults were never proposed" is true of the five baseline runs only; in the canary run the planner did propose the toggle-back (reopen) check, and that fault fired for the first time.
+
