@@ -256,3 +256,10 @@ For each part of the system: what it does, why it is built this way, how to say 
 - **The limit, said first.** The code was written and reviewed inside one model family, so a reader should re-run it. The outside auditor reviewed plans, decisions and slides, not (as far as the record shows) the code.
 - **The trail (one sentence in section 5).** Decisions are written in `docs/DECISIONS.md` before the code that implements them; `docs/WORKLOG.md` has a dated entry per day with done / evidence / next / blockers (and end-of-day handoffs); git has one commit per task. So a session on day two or three starts from the record, not from memory. If asked for proof: `git log --oneline` and the top of the work log.
 
+## 2026-10-06 - the clean-copy control run, live mode (D23 addendum 3)
+- **What happened.** Live mode on the bug-free copy (`?bugs=off`): 45.3 s, 14 calls, about 4.5 cents; plan: add a task, add a blank one, complete one; result 0 Confirmed / 0 Likely / 0 Improvement / 2 Dropped, heading "No confirmed issues". The clean server answered the blank title with a 422 and the page showed it; the count went down when the task was ticked; the judge found nothing wrong. The two Dropped are the usual click on the empty text box.
+- **Why it matters.** It is the control: same tool, same three checks, the faults removed, and it reported nothing. On the buggy copy the same paths produced the blank-title and counter findings. That is the answer to "how do you know it isn't just inventing problems?"
+- **What it does not show.** One run, three checks, one app. "No confirmed issues" is not "no issues": the delete, reopen, duplicate and long-title paths were not walked. Say "nothing reported", never "passed".
+- **How I'd say it out loud.** "I also ran it once, live, on the clean copy of the app. Same three checks: it reported nothing. On the faulty copy the same paths gave me the two findings. One run proves little, but it's the control I wanted."
+- **Counts.** Not part of the ten-run account (that is the demo path on the faulty app). Its plan counts in the plan corpus: 31 plans, delete third in 20, fourth in 11.
+
