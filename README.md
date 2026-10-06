@@ -59,7 +59,7 @@ A small validation experiment, not a benchmark — six known faults planted in t
 - **Prompt injection:** a task whose title tells the agent to ignore its instructions. It didn't.
 - **Not found:** three of the six. Two were never attempted and one ran out of step budget before it could act — a coverage gap, not a judgement gap, and the difference is measurable because the demo app records which faults actually fired.
 
-Reported numbers are **hand-checked**, not raw keyword matches. The automated matcher was wrong for 3 of 6 faults on the first real batch, which is why its output is now labelled "auto-matched, requires adjudication".
+Reported numbers come from a finding-by-finding adjudication against the answer key, not raw keyword matches. The automated matcher was wrong for 3 of 6 faults on the first real batch, which is why its output is now labelled "auto-matched, requires adjudication".
 
 ## Known limits (V1)
 
