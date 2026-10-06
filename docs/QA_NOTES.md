@@ -248,3 +248,10 @@ For each part of the system: what it does, why it is built this way, how to say 
 - **Why the plan order moves.** The planner's input is identical every run (same prompt, same model; I compared hashes). Its order still varies: delete third in runs 1-5, fourth in runs 6-10. That is sampling variance in the model, not something I changed. Expect no Confirmed card on stage, and say so calmly (branch C).
 - **How long a live run really is.** 52 to 75 s across the post-rule runs; plan for 60 to 80 s of live time in the talk.
 
+## 2026-10-06 - "How did you use AI to build it?" (write-up section 5)
+- **The loop, as the record shows it.** Claude Opus made and reviewed design decisions; Claude Sonnet wrote the code; at key decision points (the T6 design amendment, the repeat-guard proposal, the deck plan and the built deck) the owner took the plan to ChatGPT as an outside auditor; Opus then ruled on each ChatGPT point; the owner did the final check by hand. Written down in `docs/DECISIONS.md` (D10, D16-D21) and `docs/AUDIT_GUIDE.md` items 22-23.
+- **Say "at key decision points", not "every step".** T5 was built without a separate Opus pass until the owner asked for a review afterwards (AUDIT_GUIDE section 1), and the record does not show ChatGPT reading the code. Do not claim it did unless you remember doing it.
+- **The proof it was a real audit and not a rubber stamp.** ChatGPT's suggestion to tell the room "the scan stopped conservatively" was rejected: when the AI itself says `stuck`, the sentence is false. The "roughly 7 in 10 runs" sentence was also rejected as an extrapolation nobody can check.
+- **How I'd say it out loud.** "I didn't trust any one model. One decided and reviewed, one wrote the code, and at the big decisions I asked a different company's model to audit the plan. Then the first one ruled on each point, taking some and refusing others with a reason, and I did the last check by hand."
+- **The limit, said first.** The code was written and reviewed inside one model family, so a reader should re-run it. The outside auditor reviewed plans, decisions and slides, not (as far as the record shows) the code.
+
