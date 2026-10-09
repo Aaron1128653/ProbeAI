@@ -4,7 +4,7 @@
 
 Point it at a running web app. An AI decides what is worth testing, a real browser does the testing and records the evidence, and anything suspicious is replayed from a clean start before it is called confirmed. The report is tiered by rule — **Confirmed / Likely / Improvement / Dropped** — not by how sure the AI sounds.
 
-Built in two weeks (September–October 2026) as a take-home engineering exercise. This repository holds the prototype, the one-page write-up, the slide deck, and the record of how it was built. Author: Yuanhang Wang.
+A two-week prototype (September–October 2026), built as a take-home engineering exercise. This repository holds the prototype, the one-page write-up, the slide deck, and the record of how it was built. Author: Yuanhang Wang.
 
 ![A real run on the demo app: a Confirmed finding and two Likely ones](deck/assets/rehearsal_5.png)
 
