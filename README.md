@@ -8,7 +8,7 @@ Point it at a running web app. An AI decides what is worth testing, a real brows
 
 A two-week prototype (September–October 2026), built as a take-home engineering exercise. Python, Playwright, FastAPI, Claude. Author: Yuanhang Wang. Status: finished prototype (v0.1.0), not actively developed.
 
-[One-page write-up (PDF)](docs/WRITEUP.pdf) · [Slides (PDF)](docs/ProbeAI_deck.pdf) · [Audit guide](docs/AUDIT_GUIDE.md) · [Decisions](docs/DECISIONS.md)
+[One-page write-up (PDF)](docs/WRITEUP.pdf) · [Audit guide](docs/AUDIT_GUIDE.md) · [Decisions](docs/DECISIONS.md)
 
 ![A real run on the demo app: a Confirmed finding and two Likely ones](docs/images/report_card.png)
 
@@ -132,7 +132,7 @@ The honest limit: the code was written and reviewed within one model family, so 
 | [`demo_fallback/`](demo_fallback/) | The recorded run used by the free replay, and the script that serves it |
 | [`tests/`](tests/) | The test suite |
 | [`examples/`](examples/) | Scripted step files for running the browser driver without a model |
-| [`docs/`](docs/) | [Decisions](docs/DECISIONS.md) (each with the options rejected) · [Audit guide](docs/AUDIT_GUIDE.md) · [Prompts](docs/PROMPTS.md) · [Research](docs/RESEARCH.md) · [Improvement audit](docs/IMPROVEMENT_AUDIT.md) · [Write-up](docs/WRITEUP.pdf) · [Slides](docs/ProbeAI_deck.pdf) |
+| [`docs/`](docs/) | [Decisions](docs/DECISIONS.md) (each with the options rejected) · [Audit guide](docs/AUDIT_GUIDE.md) · [Prompts](docs/PROMPTS.md) · [Research](docs/RESEARCH.md) · [Improvement audit](docs/IMPROVEMENT_AUDIT.md) · [Write-up](docs/WRITEUP.pdf) |
 | [`docs/process/`](docs/process/) | The record of the build: [work log](docs/process/WORKLOG.md) and [Q&A notes](docs/process/QA_NOTES.md) |
 
 ## License
