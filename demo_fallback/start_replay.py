@@ -5,8 +5,7 @@ r"""Start the labelled fallback: the web page in REPLAY mode, serving a recordin
 Opens nothing by itself: browse to http://127.0.0.1:8001/ (the page shows a full-width REPLAY banner).
 Default: the committed fixture (rehearsal 5, pinned by hash, D18) and the seeded demo app on
 http://127.0.0.1:8765/ (start that first). A different recording may be given for practice; it is
-announced as NOT the pinned fallback. Costs nothing: replay mode has no API client. See
-docs/process/DEMO_RUNBOOK.md, D17 and D18.
+announced as NOT the pinned fallback. Costs nothing: replay mode has no API client. See D17 and D18 in docs/DECISIONS.md.
 """
 import hashlib
 import os

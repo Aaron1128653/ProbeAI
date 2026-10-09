@@ -5,18 +5,18 @@ __pycache__/
 *.pyc
 .pytest_cache/
 runs/
-node_modules/
 .idea/
 .vscode/
 *.log
 
-# reference material with personal / confidential info - never commit
+# local reference material, never committed
 Mybackground/
 Project background/
 
-# deck build (DECK_PLAN 0c)
-deck/.venv-deck/
-deck/renders/
-deck/ProbeAI_sample.pptx
-deck/~$*
-deck/_build/
+# local working files: kept on disk, not published (the build-time CLAUDE.md and .claude/ are at tag v0.1.0)
+CLAUDE.md
+.claude/
+deck/
+docs/WRITEUP.docx
+demo_fallback/*.bat
+demo_fallback/*.ps1

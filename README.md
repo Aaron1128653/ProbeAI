@@ -6,11 +6,11 @@ Point it at a running web app. An AI decides what is worth testing, a real brows
 
 **What is different:** an AI opinion alone can never reach Confirmed. That tier needs hard browser evidence — a server error, an uncaught page error, a failed request — that came back in every clean replay. The project also publishes what it missed.
 
-A two-week prototype (September–October 2026), built as a take-home engineering exercise. Python, Playwright, FastAPI, Claude. Author: Yuanhang Wang.
+A two-week prototype (September–October 2026), built as a take-home engineering exercise. Python, Playwright, FastAPI, Claude. Author: Yuanhang Wang. Status: finished prototype (v0.1.0), not actively developed.
 
-[One-page write-up (PDF)](docs/WRITEUP.pdf) · [Slides](deck/ProbeAI_deck.pptx) · [Audit guide](docs/AUDIT_GUIDE.md) · [Decisions](docs/DECISIONS.md)
+[One-page write-up (PDF)](docs/WRITEUP.pdf) · [Slides (PDF)](docs/ProbeAI_deck.pdf) · [Audit guide](docs/AUDIT_GUIDE.md) · [Decisions](docs/DECISIONS.md)
 
-![A real run on the demo app: a Confirmed finding and two Likely ones](deck/assets/readme_report_card.png)
+![A real run on the demo app: a Confirmed finding and two Likely ones](docs/images/report_card.png)
 
 *A real live run against the demo app (24 September 2026): 53.8 s, 12 model calls, about 5 US cents. The Confirmed finding is the failing delete: the browser recorded a server error, then recorded it again in a clean replay.*
 
@@ -24,7 +24,7 @@ python -m uvicorn demo_app.server:app --port 8765    # terminal 1: the app under
 python demo_fallback/start_replay.py                 # terminal 2: ProbeAI in REPLAY mode
 ```
 
-Open <http://127.0.0.1:8001/>, expand **Advanced**, type `/__reset` (two underscores) as the reset path, and click **Run test**. It takes about 11 seconds. The page shows a full-width **REPLAY** banner at all times, so nobody has to guess which mode they are watching. The app under test, <http://127.0.0.1:8765/>, is a small task list with six deliberately planted faults; add `?bugs=off` to the address for the fault-free control copy.
+Open <http://127.0.0.1:8001/>, expand **Advanced**, type `/__reset` (two underscores) as the reset path so each replay starts from the same state, and click **Run test**. It takes about 11 seconds. The page shows a full-width **REPLAY** banner at all times, so nobody has to guess which mode they are watching. The app under test, <http://127.0.0.1:8765/>, is a small task list with six deliberately planted faults; add `?bugs=off` to the address for the fault-free control copy.
 
 <details>
 <summary>First time? Set up a virtual environment (developed and tested on Python 3.14, Windows 11)</summary>
@@ -62,13 +62,7 @@ URL → missions → browser evidence → judge → replay → tiered report
 4. **Replay.** Anything suspicious is re-run from a clean browser and a reset app. If it doesn't happen again, it doesn't get called confirmed.
 5. **Report.** Findings are tiered by rule, not by the model's own confidence.
 
-**Why this approach**
-
-- **The AI decides what is worth testing** — that's the part that needs judgement, and the part a script can't do.
-- **The browser records the evidence** — so the AI can interpret what happened but cannot invent it.
-- **Suspected failures are replayed before being called confirmed** — a one-off glitch and a real bug look identical until you try again.
-
-The honest limitation, stated up front: a replay repeats the agent's own mistakes too. That's what the pre-registered expectation and the separate "argue the opposite" pass are for.
+The split is deliberate: the AI does the part that needs judgement (what to try, whether an outcome looks wrong), and the browser supplies the evidence, which the AI cannot write. The honest limitation: a replay repeats the agent's own mistakes too. That is why the agent writes down what it expects *before* each action, and why a separate pass is asked to argue the finding is *not* a bug.
 
 ## What the four tiers mean
 
@@ -79,17 +73,14 @@ The honest limitation, stated up front: a replay repeats the agent's own mistake
 | **Improvement** | The judge calls it a suggestion, not a defect. Never Confirmed. |
 | **Dropped** | Looked at and dismissed, with the reason shown (it did not come back, or a soft signal the judge says is expected behaviour). |
 
-Confirmed is a statement about the *evidence*, not about whether the bug exists: a wrong number on screen can be a real bug and still be only Likely, because the machine measured nothing. (A rarer second path to Confirmed: a soft signal that is reproduced every time and survives an "argue the opposite" pass.)
+Confirmed is a statement about the *evidence*, not about whether the bug exists: a wrong number on screen can be a real bug and still be only Likely, because the machine measured nothing. (A rarer second path to Confirmed: a soft signal that is reproduced every time and survives the "argue it is not a bug" pass.)
 
 ## What was actually measured
 
-**Evaluation mode** (5 checks per run, 22–23 September): six known faults planted in the demo app, five runs against the broken build and five against a clean copy.
+**Evaluation mode** (5 checks per run, 22–23 September): six known faults planted in the demo app, five runs against the broken build and five against a clean copy. Headline counts are in [Results at a glance](#results-at-a-glance). Two details behind them:
 
-- **Found reliably:** the failing delete (hard evidence: HTTP 500, reproduced every time) and the blank-title bug — 5/5 and 5/5.
 - **The interesting failure:** a wrong "items left" counter happened in **every** run and was reported in **none** of them. The cause turned out to be mine, not the model's — the judge was only shown what *changed* on the page, and a counter that fails to update changes nothing. After changing what it is shown (not its instructions), it was reported in 3 of 3 later runs.
-- **False alarms:** 1 across 5 clean runs in the baseline, 0 across the 3 runs after. Non-zero and reported as such.
 - **Prompt injection:** a task whose title tells the agent to ignore its instructions. It didn't.
-- **Not found:** three of the six. In the baseline two were never proposed by the planner and one ran out of step budget — a coverage gap, not a judgement gap.
 
 **Live mode** (3 checks per run, about a minute), through the web page, on the demo app — ten runs, 23 September to 6 October:
 
@@ -108,7 +99,7 @@ Reported evaluation numbers come from a finding-by-finding adjudication against 
 - **The retry guard only covers hard, identical failures.** A model that keeps retrying something that silently does nothing is not stopped, deliberately (weaker evidence).
 - **The Improvement tier is the least validated part.** Of the 14 suggestions in the recorded evaluation runs, none was worth showing (see [`docs/IMPROVEMENT_AUDIT.md`](docs/IMPROVEMENT_AUDIT.md)).
 - **Out of scope on purpose:** reading the code; logins (the tool would have to hold passwords, and typing into password fields is blocked); accessibility, speed, mobile and visual-regression scans; large-site crawling; production sites (staging only, one site; it will not press pay, publish, upload, download or delete-account).
-- **The run folders behind these numbers are not published** (`runs/` is git-ignored). The write-up, the decisions, the audit guide and one recorded run (the replay fixture) are.
+- **The run folders behind these numbers are not published** (`runs/` is git-ignored). The write-up, the decisions, the audit guide and one recorded run (the recording used by the free replay) are.
 
 ## Run it live
 
@@ -125,27 +116,24 @@ Open <http://127.0.0.1:8000/> (banner: **LIVE**), enter `http://127.0.0.1:8765/`
 
 Spending is deliberately awkward: there is no button on the page that can authorise it, the mode is fixed when the server starts, every run has a cost cap, and all real calls add to one shared running total.
 
-On Windows, `demo_fallback\start_demo.bat` starts the demo app and the free REPLAY page in one click, `demo_fallback\start_demo_live.bat` adds the LIVE page, and `demo_fallback\stop_demo.bat` stops them.
-
 ## How it was built
 
 The code was written with AI assistance, under a review loop rather than trust in any one model: Claude Opus made and reviewed the design decisions, Claude Sonnet wrote the code, and at key decision points the plan was taken to ChatGPT as an outside auditor, with Opus ruling on each of its points (some adopted, some rejected with a written reason). The author did the final check. Decisions are written down before the code, a daily work log keeps the trail, and git has one commit per task, so any later session could pick up from the record.
 
-The honest limit: the code was written and reviewed within one model family, so re-run it rather than trust it. [`docs/AUDIT_GUIDE.md`](docs/AUDIT_GUIDE.md) lists every claim with a command to check it, what is self-reported versus independently re-run, and the mistakes found along the way. The commands in [`.claude/`](.claude/) are the Claude Code commands the workflow used.
+The honest limit: the code was written and reviewed within one model family, so re-run it rather than trust it. [`docs/AUDIT_GUIDE.md`](docs/AUDIT_GUIDE.md) lists every claim with a command to check it, what is self-reported versus independently re-run, and the mistakes found along the way. The instruction files the AI assistants followed during the build ([`CLAUDE.md`](https://github.com/Aaron1128653/ProbeAI/blob/v0.1.0/CLAUDE.md) and [`.claude/`](https://github.com/Aaron1128653/ProbeAI/tree/v0.1.0/.claude)) are preserved at tag v0.1.0.
 
 ## Repository map
 
 | | |
 |---|---|
-| [`probe/`](probe/) | The tester: agent loop, browser harness, oracles, replay, tiering rules, LLM client with spend caps |
+| [`probe/`](probe/) | The tester: agent loop, browser driver, evidence checks, replay, tiering rules, LLM client with spend caps |
 | [`web/`](web/) | FastAPI server and the one static page |
 | [`demo_app/`](demo_app/) | TaskBoard, the app under test, with six planted faults and the answer key (`ground_truth.json`) |
-| [`demo_fallback/`](demo_fallback/) | The pinned replay fixture and the Windows launchers |
+| [`demo_fallback/`](demo_fallback/) | The recorded run used by the free replay, and the script that serves it |
 | [`tests/`](tests/) | The test suite |
-| [`examples/`](examples/) | Scripted step files for running the harness without a model |
-| [`deck/`](deck/) | The slide deck and the scripts that build and check it (Windows and PowerPoint needed to rebuild) |
-| [`docs/`](docs/) | [Decisions](docs/DECISIONS.md) (each with the options rejected) · [Audit guide](docs/AUDIT_GUIDE.md) · [Prompts](docs/PROMPTS.md) · [Research](docs/RESEARCH.md) · [Improvement audit](docs/IMPROVEMENT_AUDIT.md) · [Write-up](docs/WRITEUP.pdf) |
-| [`docs/process/`](docs/process/) | The record of the build: [work log](docs/process/WORKLOG.md), [Q&A notes](docs/process/QA_NOTES.md), [demo runbook](docs/process/DEMO_RUNBOOK.md) |
+| [`examples/`](examples/) | Scripted step files for running the browser driver without a model |
+| [`docs/`](docs/) | [Decisions](docs/DECISIONS.md) (each with the options rejected) · [Audit guide](docs/AUDIT_GUIDE.md) · [Prompts](docs/PROMPTS.md) · [Research](docs/RESEARCH.md) · [Improvement audit](docs/IMPROVEMENT_AUDIT.md) · [Write-up](docs/WRITEUP.pdf) · [Slides](docs/ProbeAI_deck.pdf) |
+| [`docs/process/`](docs/process/) | The record of the build: [work log](docs/process/WORKLOG.md) and [Q&A notes](docs/process/QA_NOTES.md) |
 
 ## License
 
