@@ -3,7 +3,7 @@
 Format: id, date, decision, rejected options, consequences, Q&A answer (say it out loud in plain words).
 Evidence and sources: `docs/RESEARCH.md`.
 
-**Note on paths.** Entries below name files by their locations at the time: `docs/WORKLOG.md`, `docs/QA_NOTES.md` and `docs/DEMO_RUNBOOK.md` are now in `docs/process/`, and `docs/DECK_PLAN.md`, `docs/process/DEMO_RUNBOOK.md`, the deck build scripts, the slides and the Windows launchers were removed from the tree (all in git history; `CLAUDE.md` and `.claude/` are kept at tag v0.1.0).
+**Note on paths.** Entries below name files by their locations at the time: `docs/WORKLOG.md` and `docs/QA_NOTES.md` are now in `docs/process/`, and `docs/DECK_PLAN.md`, `docs/DEMO_RUNBOOK.md`, the deck build scripts, the slides and the Windows launchers were removed from the tree (all in git history; `CLAUDE.md` and `.claude/` are kept at tag v0.1.0).
 
 **Note on commit hashes.** The history was rewritten once on 2026-10-09 (see the note in `docs/AUDIT_GUIDE.md`); commit hashes quoted below were translated to the new ones.
 
