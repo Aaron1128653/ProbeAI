@@ -4,11 +4,51 @@
 
 Point it at a running web app. An AI decides what is worth testing, a real browser does the testing and records the evidence, and anything suspicious is replayed from a clean start before it is called confirmed. The report is tiered by rule — **Confirmed / Likely / Improvement / Dropped** — not by how sure the AI sounds.
 
-A two-week prototype (September–October 2026), built as a take-home engineering exercise. This repository holds the prototype, the one-page write-up, the slide deck, and the record of how it was built. Author: Yuanhang Wang.
+**What is different:** an AI opinion alone can never reach Confirmed. That tier needs hard browser evidence — a server error, an uncaught page error, a failed request — that came back in every clean replay. The project also publishes what it missed.
 
-![A real run on the demo app: a Confirmed finding and two Likely ones](deck/assets/rehearsal_5.png)
+A two-week prototype (September–October 2026), built as a take-home engineering exercise. Python, Playwright, FastAPI, Claude. Author: Yuanhang Wang.
+
+[One-page write-up (PDF)](docs/WRITEUP.pdf) · [Slides](deck/ProbeAI_deck.pptx) · [Audit guide](docs/AUDIT_GUIDE.md) · [Decisions](docs/DECISIONS.md)
+
+![A real run on the demo app: a Confirmed finding and two Likely ones](deck/assets/readme_report_card.png)
 
 *A real live run against the demo app (24 September 2026): 53.8 s, 12 model calls, about 5 US cents. The Confirmed finding is the failing delete: the browser recorded a server error, then recorded it again in a clean replay.*
+
+## Try it free
+
+About two minutes, no API key. This replays a recording of a real run through the same page.
+
+```bash
+pip install -r requirements.txt && playwright install chromium
+python -m uvicorn demo_app.server:app --port 8765    # terminal 1: the app under test
+python demo_fallback/start_replay.py                 # terminal 2: ProbeAI in REPLAY mode
+```
+
+Open <http://127.0.0.1:8001/>, expand **Advanced**, type `/__reset` (two underscores) as the reset path, and click **Run test**. It takes about 11 seconds. The page shows a full-width **REPLAY** banner at all times, so nobody has to guess which mode they are watching. The app under test, <http://127.0.0.1:8765/>, is a small task list with six deliberately planted faults; add `?bugs=off` to the address for the fault-free control copy.
+
+<details>
+<summary>First time? Set up a virtual environment (developed and tested on Python 3.14, Windows 11)</summary>
+
+```bash
+python -m venv .venv
+# Windows: .venv\Scripts\activate      macOS / Linux: source .venv/bin/activate
+pip install -r requirements.txt
+playwright install chromium
+```
+
+</details>
+
+**Tests:** `python -m pytest -q` runs 363 tests. None of them calls the paid API. A few need local recordings under `runs/` (not published) and skip without them.
+
+## Results at a glance
+
+Small validation experiments, not a benchmark. The demo app records which of its six faults really fired, so a miss can be told apart as "never reached" or "reached but not seen".
+
+- **Found reliably:** the failing delete (hard evidence: HTTP 500, reproduced every time) and the blank-title bug — 5/5 and 5/5.
+- **Not found:** three of the six. In the baseline two were never proposed by the planner and one ran out of step budget — a coverage gap, not a judgement gap.
+- **False alarms:** 1 across 5 clean runs in the baseline, 0 across the 3 runs after. Non-zero and reported as such.
+
+Full results, including the live runs and the misses, are [below](#what-was-actually-measured).
 
 ## How it works
 
@@ -22,6 +62,14 @@ URL → missions → browser evidence → judge → replay → tiered report
 4. **Replay.** Anything suspicious is re-run from a clean browser and a reset app. If it doesn't happen again, it doesn't get called confirmed.
 5. **Report.** Findings are tiered by rule, not by the model's own confidence.
 
+**Why this approach**
+
+- **The AI decides what is worth testing** — that's the part that needs judgement, and the part a script can't do.
+- **The browser records the evidence** — so the AI can interpret what happened but cannot invent it.
+- **Suspected failures are replayed before being called confirmed** — a one-off glitch and a real bug look identical until you try again.
+
+The honest limitation, stated up front: a replay repeats the agent's own mistakes too. That's what the pre-registered expectation and the separate "argue the opposite" pass are for.
+
 ## What the four tiers mean
 
 | Tier | Meaning |
@@ -33,61 +81,7 @@ URL → missions → browser evidence → judge → replay → tiered report
 
 Confirmed is a statement about the *evidence*, not about whether the bug exists: a wrong number on screen can be a real bug and still be only Likely, because the machine measured nothing. (A rarer second path to Confirmed: a soft signal that is reproduced every time and survives an "argue the opposite" pass.)
 
-## Why this approach
-
-- **The AI decides what is worth testing** — that's the part that needs judgement, and the part a script can't do.
-- **The browser records the evidence** — so the AI can interpret what happened but cannot invent it.
-- **Suspected failures are replayed before being called confirmed** — a one-off glitch and a real bug look identical until you try again.
-
-The honest limitation, stated up front: a replay repeats the agent's own mistakes too. That's what the pre-registered expectation and the separate "argue the opposite" pass are for.
-
-## Quick start
-
-Developed and tested on Python 3.14 (Windows 11).
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate      macOS / Linux: source .venv/bin/activate
-pip install -r requirements.txt
-playwright install chromium
-```
-
-**1. Start the demo app** — a small task list with six deliberately planted faults:
-
-```bash
-python -m uvicorn demo_app.server:app --port 8765
-```
-
-Open <http://127.0.0.1:8765/>. Add `?bugs=off` to the address for the fault-free control copy.
-
-**2. Run ProbeAI in REPLAY mode** — plays back a recording of a real run. No API key, no cost:
-
-```bash
-python demo_fallback/start_replay.py
-```
-
-Open <http://127.0.0.1:8001/>, expand **Advanced**, type `/__reset` (two underscores) as the reset path, and click **Run test**. It takes about 11 seconds. The page shows a full-width **REPLAY** banner at all times, so nobody has to guess which mode they are watching.
-
-**3. Run it LIVE** (optional; real API calls, about 5 US cents a run). Copy `.env.example` to `.env`, put your key in `ANTHROPIC_API_KEY`, then:
-
-```bash
-# macOS / Linux
-PROBE_LLM_MODE=record PROBE_WEB_YES_SPEND=1 python -m uvicorn web.server:app --port 8000
-# Windows PowerShell
-$env:PROBE_LLM_MODE="record"; $env:PROBE_WEB_YES_SPEND="1"; python -m uvicorn web.server:app --port 8000
-```
-
-Open <http://127.0.0.1:8000/> (banner: **LIVE**), enter `http://127.0.0.1:8765/` as the URL and `/__reset` as the reset path, and click **Run test**. A run takes about a minute. `record` mode also saves the model calls, so the run can be replayed later for free.
-
-Spending is deliberately awkward: there is no button on the page that can authorise it, the mode is fixed when the server starts, every run has a cost cap, and all real calls add to one shared running total.
-
-On Windows, `demo_fallback\start_demo.bat` starts the demo app and the free REPLAY page in one click, `demo_fallback\start_demo_live.bat` adds the LIVE page, and `demo_fallback\stop_demo.bat` stops them.
-
-**Tests:** `python -m pytest -q` runs 363 tests. None of them calls the paid API. A few need local recordings under `runs/` (not published) and skip without them.
-
 ## What was actually measured
-
-Small validation experiments, not a benchmark. The demo app records which of its six faults really fired, so a miss can be told apart as "never reached" or "reached but not seen".
 
 **Evaluation mode** (5 checks per run, 22–23 September): six known faults planted in the demo app, five runs against the broken build and five against a clean copy.
 
@@ -116,16 +110,28 @@ Reported evaluation numbers come from a finding-by-finding adjudication against 
 - **Out of scope on purpose:** reading the code; logins (the tool would have to hold passwords, and typing into password fields is blocked); accessibility, speed, mobile and visual-regression scans; large-site crawling; production sites (staging only, one site; it will not press pay, publish, upload, download or delete-account).
 - **The run folders behind these numbers are not published** (`runs/` is git-ignored). The write-up, the decisions, the audit guide and one recorded run (the replay fixture) are.
 
+## Run it live
+
+Optional; real API calls, about 5 US cents a run. Copy `.env.example` to `.env`, put your key in `ANTHROPIC_API_KEY`, start the demo app as above, then:
+
+```bash
+# macOS / Linux
+PROBE_LLM_MODE=record PROBE_WEB_YES_SPEND=1 python -m uvicorn web.server:app --port 8000
+# Windows PowerShell
+$env:PROBE_LLM_MODE="record"; $env:PROBE_WEB_YES_SPEND="1"; python -m uvicorn web.server:app --port 8000
+```
+
+Open <http://127.0.0.1:8000/> (banner: **LIVE**), enter `http://127.0.0.1:8765/` as the URL and `/__reset` as the reset path, and click **Run test**. A run takes about a minute. `record` mode also saves the model calls, so the run can be replayed later for free.
+
+Spending is deliberately awkward: there is no button on the page that can authorise it, the mode is fixed when the server starts, every run has a cost cap, and all real calls add to one shared running total.
+
+On Windows, `demo_fallback\start_demo.bat` starts the demo app and the free REPLAY page in one click, `demo_fallback\start_demo_live.bat` adds the LIVE page, and `demo_fallback\stop_demo.bat` stops them.
+
 ## How it was built
 
 The code was written with AI assistance, under a review loop rather than trust in any one model: Claude Opus made and reviewed the design decisions, Claude Sonnet wrote the code, and at key decision points the plan was taken to ChatGPT as an outside auditor, with Opus ruling on each of its points (some adopted, some rejected with a written reason). The author did the final check. Decisions are written down before the code, a daily work log keeps the trail, and git has one commit per task, so any later session could pick up from the record.
 
 The honest limit: the code was written and reviewed within one model family, so re-run it rather than trust it. [`docs/AUDIT_GUIDE.md`](docs/AUDIT_GUIDE.md) lists every claim with a command to check it, what is self-reported versus independently re-run, and the mistakes found along the way. The commands in [`.claude/`](.claude/) are the Claude Code commands the workflow used.
-
-## Deliverables
-
-- **One-page write-up:** [`docs/WRITEUP.pdf`](docs/WRITEUP.pdf) (also [`.md`](docs/WRITEUP.md) and [`.docx`](docs/WRITEUP.docx)): the problem, the options considered, and what was left out.
-- **Slide deck:** [`deck/ProbeAI_deck.pptx`](deck/ProbeAI_deck.pptx), 10 talk slides plus backups, generated by `deck/build_deck.py`.
 
 ## Repository map
 
@@ -134,22 +140,12 @@ The honest limit: the code was written and reviewed within one model family, so 
 | [`probe/`](probe/) | The tester: agent loop, browser harness, oracles, replay, tiering rules, LLM client with spend caps |
 | [`web/`](web/) | FastAPI server and the one static page |
 | [`demo_app/`](demo_app/) | TaskBoard, the app under test, with six planted faults and the answer key (`ground_truth.json`) |
-| [`demo_fallback/`](demo_fallback/) | The pinned replay fixture and the launchers |
+| [`demo_fallback/`](demo_fallback/) | The pinned replay fixture and the Windows launchers |
 | [`tests/`](tests/) | The test suite |
 | [`examples/`](examples/) | Scripted step files for running the harness without a model |
-| [`deck/`](deck/) | The slide deck and the scripts that build and check it |
-| [`docs/`](docs/) | Decisions, audit guide, Q&A notes, research, prompts, work log, runbook |
-
-More detail:
-
-| | |
-|---|---|
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Why it is built this way — each decision with the options rejected and the reason |
-| [`docs/AUDIT_GUIDE.md`](docs/AUDIT_GUIDE.md) | For a reviewer: claims, how to check them, and corrections found along the way |
-| [`docs/process/QA_NOTES.md`](docs/process/QA_NOTES.md) | Each part in plain language, for explaining to a non-engineer |
-| [`docs/PROMPTS.md`](docs/PROMPTS.md) | The model prompts |
-| [`docs/RESEARCH.md`](docs/RESEARCH.md) | The research behind the choices |
-| [`docs/process/WORKLOG.md`](docs/process/WORKLOG.md) | The daily log |
+| [`deck/`](deck/) | The slide deck and the scripts that build and check it (Windows and PowerPoint needed to rebuild) |
+| [`docs/`](docs/) | [Decisions](docs/DECISIONS.md) (each with the options rejected) · [Audit guide](docs/AUDIT_GUIDE.md) · [Prompts](docs/PROMPTS.md) · [Research](docs/RESEARCH.md) · [Improvement audit](docs/IMPROVEMENT_AUDIT.md) · [Write-up](docs/WRITEUP.pdf) |
+| [`docs/process/`](docs/process/) | The record of the build: [work log](docs/process/WORKLOG.md), [Q&A notes](docs/process/QA_NOTES.md), [demo runbook](docs/process/DEMO_RUNBOOK.md) |
 
 ## License
 
