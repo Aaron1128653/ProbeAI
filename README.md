@@ -38,7 +38,7 @@ playwright install chromium
 
 </details>
 
-**Tests:** `python -m pytest -q` runs 363 tests. None of them calls the paid API. A few need local recordings under `runs/` (not published) and skip without them.
+**Tests:** `python -m pytest -q` runs 363 tests, none of which calls the paid API. In a fresh clone 347 pass and 16 skip, because those 16 need local recordings under `runs/`, which are not published.
 
 ## Results at a glance
 
