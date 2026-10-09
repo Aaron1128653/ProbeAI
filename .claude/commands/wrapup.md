@@ -8,7 +8,7 @@ allowed-tools: Read, Edit, Write, Bash, Grep, Glob
 Wrap up the current working session. Note from the user: $ARGUMENTS
 
 1. Run `git status` and `git diff --stat` to see what changed since the last commit.
-2. Open `docs/WORKLOG.md`. Find or create today's section (`## YYYY-MM-DD`). Fill in, from real evidence (files, test output), not memory:
+2. Open `docs/process/WORKLOG.md`. Find or create today's section (`## YYYY-MM-DD`). Fill in, from real evidence (files, test output), not memory:
    - **Done**: finished tasks and where they live.
    - **Evidence**: the command that was run and its result (pass/fail, counts).
    - **In progress**: anything half-finished and its exact state.

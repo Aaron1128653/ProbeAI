@@ -3,6 +3,8 @@
 Format: id, date, decision, rejected options, consequences, Q&A answer (say it out loud in plain words).
 Evidence and sources: `docs/RESEARCH.md`.
 
+**Note on paths.** Entries below name files by their locations at the time: `docs/WORKLOG.md`, `docs/QA_NOTES.md` and `docs/DEMO_RUNBOOK.md` are now in `docs/process/`, and `docs/DECK_PLAN.md` was removed from the tree (it is in git history).
+
 **How to read this file.** Entries are chronological and later ones amend earlier ones; where they conflict, the higher number wins. Statements superseded on purpose (kept so the reasoning is traceable): D1 "element index" and D2 "custom JS extractor" and "tool use for structured output" -> D7 (ARIA-snapshot refs, `messages.parse` structured outputs); D3 tier wording -> D7 point 3 and D8 rulings; D4 "/__reset clears the trigger log" -> D8 ruling 5; D1/D2 default budgets -> D7 point 6 (profiles); D17 "roughly 6-7 runs in 10 ... say ranges" as a stage statement and D17's fallback path `runs/web_c5333263/` -> D18; D18's branch-B last sentence ("...so no other Confirmed issue is not a pass") -> D19; 0d's slide 1, 3, 5 and 8 texts, the slide-1 layout and the timing window -> D20 (`docs/DECK_PLAN.md` 0e); 0e E2's slide-1 source line, title size, card and author-block positions, 0e E4's slide-1 headline size, and 0d D2's accent list -> D21 (`docs/DECK_PLAN.md` 0f); every rehearsal date (D17 decision 5 and D18 decision 5 "2026-10-04..06", 0e E7's suggested REPLAY dates "09-26, 09-28, 09-30") -> D22 (its calendar wins; the E7 protocol, thresholds and cut order are unchanged).
 
 ---

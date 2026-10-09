@@ -31,9 +31,9 @@ Whole run should finish in about 2 minutes; UI streams every step as it happens.
 
 ## Working rules
 - Verify by running the thing; show real output before saying "done".
-- Keep `docs/DECISIONS.md` (why) and `docs/QA_NOTES.md` (how to explain each part in Q&A) current.
+- Keep `docs/DECISIONS.md` (why) and `docs/process/QA_NOTES.md` (how to explain each part in Q&A) current.
 - Git is in use: one commit per finished task. Commit message = what and why. Never commit `.env`, `.venv/`, `runs/`. Exception (D18): curated, secret-scanned replay fixtures under `demo_fallback/fixture/` are committed on purpose as the labelled demo fallback; `runs/` itself is still never committed, and adding or replacing a fixture needs a `/decide` entry. Exception (D19): privacy-checked screenshots of the synthetic TaskBoard demo app under `deck/assets/`, the deck build/QA/render scripts and the finished `deck/ProbeAI_deck.pptx` are committed on purpose; `runs/`, `deck/renders/`, the sample pptx, the PDF and the deck venv are not, a new TaskBoard/ProbeAI screenshot needs only the D19 check plus a dated WORKLOG line, and a picture from anywhere else needs a `/decide` entry.
-- After every finished task append to `docs/WORKLOG.md` (today's section: done / evidence / next / blockers). Do it continuously, not only at the end of the day.
+- After every finished task append to `docs/process/WORKLOG.md` (today's section: done / evidence / next / blockers). Do it continuously, not only at the end of the day.
 - Usage limits are not visible to the assistant. If a limit or low-usage message appears, or the user says so, stop new work and run `/wrapup`.
 - API money: the user funded 20 USD and wants most of it left (D9). Total real spend cap 10 USD; per-run cap 0.30; `PROBE_LLM_MODE` has no default and real/record runs need `--yes-spend`. Build and test with fake or replay; a real call needs an explicit go from the user. Never hard-code keys; the user creates `.env` locally; never print, log or commit the key.
 - Process safety: stop servers by PID or port, never `taskkill /IM python.exe` (other work runs on this machine).

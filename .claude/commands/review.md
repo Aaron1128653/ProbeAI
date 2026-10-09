@@ -9,7 +9,7 @@ You are the reviewer for the AI App Tester project. Read-only: do not modify fil
 
 Focus: $ARGUMENTS
 
-Read `CLAUDE.md`, `docs/DECISIONS.md`, `docs/QA_NOTES.md`, then the code. Run tests or the tool where possible.
+Read `CLAUDE.md`, `docs/DECISIONS.md`, `docs/process/QA_NOTES.md`, then the code. Run tests or the tool where possible.
 
 Give a pass / partial / fail for each, with one line of evidence:
 1. The five minimum requirements (input, AI analysis, bugs AND improvements, readable output, runs live).

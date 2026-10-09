@@ -6,7 +6,7 @@ Opens nothing by itself: browse to http://127.0.0.1:8001/ (the page shows a full
 Default: the committed fixture (rehearsal 5, pinned by hash, D18) and the seeded demo app on
 http://127.0.0.1:8765/ (start that first). A different recording may be given for practice; it is
 announced as NOT the pinned fallback. Costs nothing: replay mode has no API client. See
-docs/DEMO_RUNBOOK.md, D17 and D18.
+docs/process/DEMO_RUNBOOK.md, D17 and D18.
 """
 import hashlib
 import os

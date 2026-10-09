@@ -81,7 +81,7 @@ Open <http://127.0.0.1:8000/> (banner: **LIVE**), enter `http://127.0.0.1:8765/`
 
 Spending is deliberately awkward: there is no button on the page that can authorise it, the mode is fixed when the server starts, every run has a cost cap, and all real calls add to one shared running total.
 
-On Windows, `start_demo.bat` starts the demo app and the free REPLAY page in one click, `start_demo_live.bat` adds the LIVE page, and `stop_demo.bat` stops them.
+On Windows, `demo_fallback\start_demo.bat` starts the demo app and the free REPLAY page in one click, `demo_fallback\start_demo_live.bat` adds the LIVE page, and `demo_fallback\stop_demo.bat` stops them.
 
 **Tests:** `python -m pytest -q` runs 363 tests. None of them calls the paid API. A few need local recordings under `runs/` (not published) and skip without them.
 
@@ -146,10 +146,10 @@ More detail:
 |---|---|
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Why it is built this way — each decision with the options rejected and the reason |
 | [`docs/AUDIT_GUIDE.md`](docs/AUDIT_GUIDE.md) | For a reviewer: claims, how to check them, and corrections found along the way |
-| [`docs/QA_NOTES.md`](docs/QA_NOTES.md) | Each part in plain language, for explaining to a non-engineer |
+| [`docs/process/QA_NOTES.md`](docs/process/QA_NOTES.md) | Each part in plain language, for explaining to a non-engineer |
 | [`docs/PROMPTS.md`](docs/PROMPTS.md) | The model prompts |
 | [`docs/RESEARCH.md`](docs/RESEARCH.md) | The research behind the choices |
-| [`docs/WORKLOG.md`](docs/WORKLOG.md) | The daily log |
+| [`docs/process/WORKLOG.md`](docs/process/WORKLOG.md) | The daily log |
 
 ## License
 
